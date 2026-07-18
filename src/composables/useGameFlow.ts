@@ -16,6 +16,8 @@ interface FlowState {
   result: MatchResult
   /** final score of the last match (my points / opponent's), for the result screen */
   finalScore: {mine: number; theirs: number} | null
+  /** real end-of-match stats for the result screen */
+  matchStats: {rallies: number; durationSec: number; aces: number} | null
   /** last human-readable connection/error status for UI */
   status: string
   /** local player's pixel nickname (stable for the session) */
@@ -31,6 +33,7 @@ const state = reactive<FlowState>({
   isHost: false,
   result: null,
   finalScore: null,
+  matchStats: null,
   status: '',
   myName: randomNick(),
   oppName: randomNick(),
@@ -96,9 +99,14 @@ export function useGameFlow() {
     setStatus(s: string) {
       state.status = s
     },
-    endMatch(result: MatchResult, finalScore: {mine: number; theirs: number} | null = null) {
+    endMatch(
+      result: MatchResult,
+      finalScore: {mine: number; theirs: number} | null = null,
+      matchStats: {rallies: number; durationSec: number; aces: number} | null = null,
+    ) {
       state.result = result
       state.finalScore = finalScore
+      state.matchStats = matchStats
       state.screen = 'result'
     },
     reset() {
@@ -108,6 +116,7 @@ export function useGameFlow() {
       state.isHost = false
       state.result = null
       state.finalScore = null
+      state.matchStats = null
       state.status = ''
     },
   }

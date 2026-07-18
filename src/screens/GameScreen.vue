@@ -131,11 +131,17 @@ function handleScore(s: {host: number; guest: number}) {
   score.guest = s.guest
   showToast(mineScored)
   // deuce rules live in the engine: the match ends only when phase === 'over'
-  if (game?.getState().phase !== 'over') return
+  const st = game?.getState()
+  if (st?.phase !== 'over') return
   const mine = iAmHost ? s.host : s.guest
   const theirs = iAmHost ? s.guest : s.host
+  const matchStats = {
+    rallies: st.stats.rallies,
+    durationSec: Math.round(st.stats.ticks / FIELD.physicsHz),
+    aces: st.stats.aces[mySide.value],
+  }
   teardown()
-  flow.endMatch(mine > theirs ? 'win' : 'lose', {mine, theirs})
+  flow.endMatch(mine > theirs ? 'win' : 'lose', {mine, theirs}, matchStats)
 }
 
 function leave() {

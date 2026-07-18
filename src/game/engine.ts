@@ -98,6 +98,8 @@ function nextServer(state: GameState): 0 | 1 {
 
 /** Award a point to host (0) or guest (1); transitions to over/point-pause. */
 function scorePoint(state: GameState, winner: 0 | 1, reason: PointReason): void {
+  // ace: nobody returned the serve and the point went to the server
+  if (state.rallyHits === 0 && winner === state.lastHitter) state.stats.aces[winner]++
   if (winner === 0) state.scoreHost++
   else state.scoreGuest++
   pushEvent(state, {kind: 'point', player: winner, reason, scoreHost: state.scoreHost, scoreGuest: state.scoreGuest})
@@ -164,6 +166,8 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
 
   if (state.phase === 'over' || state.phase === 'coin') return state
 
+  state.stats.ticks++ // match clock (runs through rallies & point pauses)
+
   // between-points breather: ball rests at the next server's paddle
   if (state.phase === 'point') {
     glueBallToServer(state)
@@ -193,6 +197,8 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
     state.lastHitter = state.serving
     state.bounceHost = 0
     state.bounceGuest = 0
+    state.rallyHits = 0
+    state.stats.rallies++
     state.phase = 'rally'
     state.seq++
     pushEvent(state, {kind: 'serve', player: state.serving})
@@ -352,6 +358,7 @@ function tryPaddleHit(
   state.lastHitter = hitter
   state.bounceHost = 0
   state.bounceGuest = 0
+  state.rallyHits++
   return true
 }
 

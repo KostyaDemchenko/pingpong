@@ -58,6 +58,14 @@ export interface GameState {
   pointTimer: number
   /** match history: serves & points with reasons (capped, newest last) */
   events: GameEvent[]
+  /** real match stats for the result screen (serialized with snapshots) */
+  stats: {
+    rallies: number // serves launched = points contested
+    aces: [number, number] // unreturned winning serves per player [host, guest]
+    ticks: number // 60Hz ticks while the match ran (excludes coin & pause)
+  }
+  /** paddle returns in the current rally (transient; 0 right after a serve) */
+  rallyHits: number
   // --- mutual-vote pause (both must vote to pause AND to resume) ---
   paused: boolean
   pauseVoteHost: boolean
@@ -127,6 +135,8 @@ export function initialState(): GameState {
     firstServer: -1,
     pointTimer: 0,
     events: [],
+    stats: {rallies: 0, aces: [0, 0], ticks: 0},
+    rallyHits: 0,
     paused: false,
     pauseVoteHost: false,
     pauseVoteGuest: false,

@@ -91,12 +91,14 @@ const rematchHint = computed(() => {
   return ''
 })
 
-// Placeholder end-of-game stats (mirrors the design values).
-const stats = [
-  {label: 'RALLIES', value: '42'},
-  {label: 'DURATION', value: '3:24'},
-  {label: 'ACES', value: '6'},
-] as const
+// Real end-of-game stats from the engine (— when a match ended abnormally).
+const fmtDuration = (sec: number | undefined) =>
+  sec === undefined ? '—' : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+const stats = computed(() => [
+  {label: 'RALLIES', value: flow.state.matchStats ? String(flow.state.matchStats.rallies) : '—'},
+  {label: 'DURATION', value: fmtDuration(flow.state.matchStats?.durationSec)},
+  {label: 'ACES', value: flow.state.matchStats ? String(flow.state.matchStats.aces) : '—'},
+])
 
 // ---- Falling pixel particles ------------------------------------------------
 // Win: colorful confetti raining from the top. Lose: sparse dim red "rain".
