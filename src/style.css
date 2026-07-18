@@ -1,0 +1,224 @@
+@import 'tailwindcss';
+
+/*
+ * DESIGN SYSTEM — ported 1:1 from the Pencil design (ping pong.pen).
+ * Tailwind v4 CSS-first theme: every token below becomes utility classes
+ * (e.g. bg-bg-base, text-brand, border-border-strong, font-display, p-md, gap-lg).
+ */
+@theme {
+  /* ---- Colors (Supabase-ish dark palette) ---- */
+  --color-bg-base: #151515;
+  --color-bg-surface: #1c1c1c;
+  --color-bg-elevated: #232323;
+  --color-border: #2e2e2e;
+  --color-border-strong: #3e3e3e;
+  --color-brand: #3ecf8e;
+  --color-brand-hover: #34b27b;
+  --color-brand-deep: #006239;
+  --color-brand-shadow: #0b3d28;
+  --color-text-primary: #ededed;
+  --color-text-secondary: #a0a0a0;
+  --color-text-muted: #6b6b6b;
+  --color-danger: #f76b6b;
+  --color-pixel-black: #0c0c0c;
+
+  /* Table felt greens used by the canvas/table (kept as tokens for parity) */
+  --color-table-top: #0c4c36;
+  --color-table-shade: #072518;
+  --color-table-side: #06341f;
+  --color-court-bg: #111111;
+  --color-wood: #7a4e2a;
+  --color-wood-hi: #a9744a;
+  --color-wood-grip: #5e3a18;
+  --color-ball-fill: #ececec;
+  --color-ball-shade: #b0b0b0;
+
+  /* ---- Typography (pixel fonts) ---- */
+  --font-display: 'Press Start 2P', monospace;
+  --font-body: 'Silkscreen', monospace;
+
+  /* ---- Spacing scale (Pencil space-*) ---- */
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 20px;
+  --spacing-lg: 32px;
+  --spacing-xl: 48px;
+
+  /* ---- Radii: pixel art = sharp corners everywhere ---- */
+  --radius-none: 0px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  /* crisp pixel text — disable anti-aliasing */
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+/* Nearest-neighbour scaling keeps the canvas + any sprites pixel-crisp */
+canvas,
+img {
+  image-rendering: pixelated;
+}
+
+/* ---- Custom pixel cursor ----
+   A ping-pong ball cursor everywhere; the game <canvas> hides the system cursor
+   because there the PADDLE itself is the cursor (it tracks the pointer). */
+html,
+button,
+[role='button'],
+a,
+input,
+label,
+select,
+textarea,
+summary {
+  cursor: url('/cursor-ball.svg') 12 12, auto;
+}
+canvas {
+  cursor: none;
+}
+
+/* ---- Custom pixel utilities (hard, blur-less drop shadows) ---- */
+@utility pixel-shadow {
+  box-shadow: 4px 4px 0 0 var(--color-pixel-black);
+}
+@utility pixel-shadow-lg {
+  box-shadow: 6px 6px 0 0 var(--color-pixel-black);
+}
+@utility pixel-shadow-brand {
+  box-shadow: 5px 5px 0 0 var(--color-brand-shadow);
+}
+
+/* Focus ring in-brand, still pixel-sharp */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* ---- Decorative idle motion (gentle sway/float for pixel figures) ---- */
+@keyframes pp-sway {
+  0%,
+  100% {
+    transform: translateY(0) rotate(var(--pp-rot, 0deg));
+  }
+  50% {
+    transform: translateY(-8px) rotate(calc(var(--pp-rot, 0deg) + 6deg));
+  }
+}
+@keyframes pp-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+@keyframes pp-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(var(--pp-rot, 0deg));
+  }
+  50% {
+    transform: translateY(6px) rotate(calc(var(--pp-rot, 0deg) - 5deg));
+  }
+}
+
+@utility sway {
+  animation: pp-sway 3.2s ease-in-out infinite;
+}
+@utility drift {
+  animation: pp-float 2.6s ease-in-out infinite;
+}
+@utility bob {
+  animation: pp-bob 3.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sway,
+  .drift,
+  .bob {
+    animation: none;
+  }
+}
+
+/* ---- CRT screen-to-screen transitions (App.vue <Transition name="screen">) ----
+   Old CRT TV power cycle: the leaving screen squashes vertically (top & bottom
+   collapse toward the middle) into a bright thin line, the line shrinks away;
+   the entering screen does the reverse. Both screens are absolutely stacked and
+   animate SIMULTANEOUSLY-but-staggered: the enter animation is delayed past the
+   leave (fill both holds it collapsed & invisible until its turn). Do NOT use
+   mode="out-in" — it has a blank-gap failure with this keyed <component> setup. */
+.screen-layer {
+  position: absolute;
+  inset: 0;
+}
+.screen-leave-active {
+  animation: pp-crt-off 0.24s ease-in both;
+  will-change: transform, opacity, filter;
+  z-index: 10; /* the collapsing old screen paints above the waiting new one */
+}
+.screen-enter-active {
+  animation: pp-crt-on 0.34s ease-out 0.26s both;
+  will-change: transform, opacity, filter;
+}
+@keyframes pp-crt-off {
+  0% {
+    transform: scaleY(1) scaleX(1);
+    filter: brightness(1);
+  }
+  60% {
+    transform: scaleY(0.012) scaleX(1);
+    filter: brightness(2.6);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleY(0.006) scaleX(0.1);
+    filter: brightness(3);
+    opacity: 0;
+  }
+}
+@keyframes pp-crt-on {
+  0% {
+    transform: scaleY(0.006) scaleX(0.1);
+    filter: brightness(3);
+    opacity: 1;
+  }
+  45% {
+    transform: scaleY(0.012) scaleX(1);
+    filter: brightness(2.4);
+  }
+  100% {
+    transform: scaleY(1) scaleX(1);
+    filter: brightness(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-leave-active,
+  .screen-enter-active {
+    animation: none;
+    transition: opacity 0.15s ease;
+  }
+  .screen-enter-from,
+  .screen-leave-to {
+    opacity: 0;
+  }
+}

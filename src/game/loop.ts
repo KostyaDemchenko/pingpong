@@ -1,0 +1,290 @@
+/**
+ * Game loop + canvas lifecycle for pixel-pong.
+ *
+ * createGame(canvas, opts) returns a GameHandle that runs a requestAnimationFrame
+ * loop with a fixed 60Hz physics accumulator and renders every frame. It handles
+ * hi-DPI sizing (devicePixelRatio) and keeps the canvas pixelated.
+ *
+ * Modes:
+ *  - 'local' (default): one human drives the near/guest paddle via setPointer;
+ *    the far/host paddle is driven by a simple 2-axis tracking AI.
+ *  - 'host': this peer owns physics. Feed the remote guest's paddle via
+ *    setRemotePaddle(); broadcast getState() snapshots to the guest.
+ *  - 'guest': this peer renders authoritative snapshots via applySnapshot() and
+ *    predicts only its own (near) paddle locally.
+ *
+ * View: each player sees THEMSELF at the bottom (near, green). The engine's
+ * canonical space has host far / guest near, so in host mode the whole view is
+ * flipped (nx -> 1-nx, ny -> 1-ny) for both rendering AND pointer input.
+ */
+import type {GameState} from './types'
+import {FIELD} from './types'
+import {newGame, step, startMatch as engineStartMatch, type Inputs} from './engine'
+import {drawBall, drawPaddle, drawTable, unproject} from './render'
+
+export type GameMode = 'local' | 'host' | 'guest'
+
+export interface GameHandle {
+  start(): void
+  stop(): void
+  destroy(): void
+  /** Feed the local pointer position in canvas CSS pixels; the loop maps it
+   * onto the table (inverse perspective), flips for the host view, and clamps
+   * to the local player's own half. */
+  setPointer(px: number, py: number): void
+  /** The local player's paddle in MODEL coords (for sending over the net). */
+  getLocalPaddle(): {x: number; y: number}
+  /** (host mode) Set the remote guest's paddle center in model coords. */
+  setRemotePaddle(x: number, y: number): void
+  /** (host/local) Publish the coin-flip result while still in the 'coin' phase
+   * so guest overlays can reveal the same winner from snapshots. */
+  setCoinResult(firstServer: 0 | 1): void
+  /** (host/local) Coin flip done — lock the first server & start serving. */
+  startMatch(firstServer: 0 | 1): void
+  /** Serve click for the given side (host also relays the guest's clicks).
+   * The engine ignores it unless that side is actually serving. */
+  requestServe(side: 0 | 1): void
+  /** Set a side's pause vote (both sides voting toggles paused & resets votes).
+   * In practice mode the CPU always agrees, so the player's vote acts alone. */
+  setPauseVote(side: 0 | 1, vote: boolean): void
+  getState(): GameState
+  /** (guest mode) Apply an authoritative snapshot from the host. */
+  applySnapshot(s: Partial<GameState>): void
+  /** Called whenever the score changes. */
+  onScore?: (s: {host: number; guest: number}) => void
+}
+
+const FIXED_DT = 1 / FIELD.physicsHz
+const MAX_ACCUM = 0.25 // avoid spiral-of-death after a tab stall
+
+interface Options {
+  mode?: GameMode
+}
+
+export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameHandle {
+  const mode: GameMode = opts.mode ?? 'local'
+  const flip = mode === 'host' // host sees itself near/bottom
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('createGame: 2D context unavailable')
+
+  let state = newGame()
+  let raf = 0
+  let running = false
+  let last = 0
+  let accum = 0
+
+  // logical (CSS-pixel) canvas size, updated on resize
+  let W = 1
+  let H = 1
+
+  // local player's paddle target in MODEL coords + remote guest paddle (host mode)
+  const myBand = localBand(mode)
+  let localX = 0.5
+  let localY: number = mode === 'host' ? FIELD.hostPaddleY : FIELD.guestPaddleY
+  let remoteGuestX = 0.5
+  let remoteGuestY: number = FIELD.guestPaddleY
+
+  // smoothed AI position for local mode (far/host paddle)
+  let aiX = 0.5
+  let aiY: number = FIELD.hostPaddleY
+
+  // pending serve clicks (edge-triggered, consumed by the next physics step)
+  let serveHostPending = false
+  let serveGuestPending = false
+  let aiServeTicks = 0
+
+  const dpr = () => Math.max(1, Math.min(window.devicePixelRatio || 1, 3))
+
+  function resize(): void {
+    // layout size, NOT getBoundingClientRect: the CRT screen transition scales
+    // the whole screen layer, and a rect measured mid-animation would bake the
+    // collapsed size into the canvas buffer (transforms don't retrigger the RO).
+    W = Math.max(1, canvas.clientWidth)
+    H = Math.max(1, canvas.clientHeight)
+    const ratio = dpr()
+    const pxW = Math.round(W * ratio)
+    const pxH = Math.round(H * ratio)
+    if (canvas.width !== pxW || canvas.height !== pxH) {
+      canvas.width = pxW
+      canvas.height = pxH
+    }
+    ctx!.setTransform(ratio, 0, 0, ratio, 0, 0)
+    ;(ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false
+    canvas.style.imageRendering = 'pixelated'
+  }
+
+  const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => resize()) : null
+
+  /** Simple 2-axis tracking AI for the far/host paddle in local mode. */
+  function stepAi(dt: number): void {
+    const b = state.ball
+    const targetX = clamp01(b.x)
+    // come out to meet the ball when it's incoming on the AI half, else go home
+    const incoming = b.vy < 0 && b.y < 0.6
+    const targetY = incoming
+      ? Math.min(Math.max(b.y, FIELD.hostYMin), FIELD.hostYMax)
+      : FIELD.hostPaddleY
+    const dz = 0.01
+    const dx = targetX - aiX
+    if (Math.abs(dx) > dz) aiX += Math.sign(dx) * Math.min(Math.abs(dx), 0.9 * dt)
+    const dy = targetY - aiY
+    if (Math.abs(dy) > dz) aiY += Math.sign(dy) * Math.min(Math.abs(dy), 0.6 * dt)
+    aiX = clamp01(aiX)
+  }
+
+  /** Compute engine inputs for this tick based on the mode. */
+  function computeInputs(dt: number): Inputs {
+    // consume pending serve clicks (edge-triggered)
+    const serveHost = serveHostPending
+    const serveGuest = serveGuestPending
+    serveHostPending = false
+    serveGuestPending = false
+
+    if (mode === 'host') {
+      // host authoritative: own paddle is host, guest comes from the network
+      return {hostX: localX, hostY: localY, guestX: remoteGuestX, guestY: remoteGuestY, serveHost, serveGuest}
+    }
+    // local: human = near/guest; AI = far/host (serves by itself after a beat)
+    stepAi(dt)
+    let aiServe = serveHost
+    if (state.phase === 'serve' && state.serving === 0) {
+      if (++aiServeTicks >= FIELD.aiServeDelayTicks) {
+        aiServe = true
+        aiServeTicks = 0
+      }
+    } else {
+      aiServeTicks = 0
+    }
+    return {hostX: aiX, hostY: aiY, guestX: localX, guestY: localY, serveHost: aiServe, serveGuest}
+  }
+
+  function tick(now: number): void {
+    if (!running) return
+    if (!last) last = now
+    let frameDt = (now - last) / 1000
+    last = now
+    if (frameDt > MAX_ACCUM) frameDt = MAX_ACCUM
+    accum += frameDt
+
+    const prevHost = state.scoreHost
+    const prevGuest = state.scoreGuest
+
+    // guest mode does NOT run physics; it renders the last applied snapshot and
+    // only tracks its own paddle locally.
+    if (mode !== 'guest') {
+      while (accum >= FIXED_DT) {
+        state = step(state, FIXED_DT, computeInputs(FIXED_DT))
+        accum -= FIXED_DT
+      }
+    } else {
+      accum = 0
+      state.guest.x = localX
+      state.guest.y = localY
+    }
+
+    if (state.scoreHost !== prevHost || state.scoreGuest !== prevGuest) {
+      handle.onScore?.({host: state.scoreHost, guest: state.scoreGuest})
+    }
+
+    render()
+    raf = requestAnimationFrame(tick)
+  }
+
+  /** Model -> view coords (identity for guest/local; 180° flip for host). */
+  const vx = (nx: number) => (flip ? 1 - nx : nx)
+  const vy = (ny: number) => (flip ? 1 - ny : ny)
+
+  function render(): void {
+    drawTable(ctx!, W, H)
+    // my paddle is always the near/green one in MY view; opponent far/red.
+    const far = flip ? state.guest : state.host
+    const near = flip ? state.host : state.guest
+    drawPaddle(ctx!, W, H, vx(far.x), vy(far.y), false)
+    drawBall(
+      ctx!,
+      W,
+      H,
+      vx(state.ball.x),
+      vy(state.ball.y),
+      state.ball.z,
+      flip ? -state.ball.vx : state.ball.vx,
+      flip ? -state.ball.vy : state.ball.vy,
+    )
+    drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true)
+  }
+
+  const handle: GameHandle = {
+    start(): void {
+      if (running) return
+      resize()
+      running = true
+      last = 0
+      accum = 0
+      ro?.observe(canvas)
+      raf = requestAnimationFrame(tick)
+    },
+    stop(): void {
+      running = false
+      if (raf) cancelAnimationFrame(raf)
+      raf = 0
+      ro?.disconnect()
+    },
+    destroy(): void {
+      handle.stop()
+    },
+    setPointer(px: number, py: number): void {
+      const {nx, ny} = unproject(W, H, px, py)
+      localX = clamp01(vx(nx)) // view -> model (vx/vy are involutions)
+      localY = Math.min(Math.max(vy(ny), myBand.min), myBand.max)
+    },
+    getLocalPaddle(): {x: number; y: number} {
+      return {x: localX, y: localY}
+    },
+    setRemotePaddle(x: number, y: number): void {
+      remoteGuestX = clamp01(x)
+      remoteGuestY = Math.min(Math.max(y, FIELD.guestYMin), FIELD.guestYMax)
+    },
+    setCoinResult(firstServer: 0 | 1): void {
+      state.firstServer = firstServer
+    },
+    startMatch(firstServer: 0 | 1): void {
+      if (state.phase === 'coin') engineStartMatch(state, firstServer)
+    },
+    requestServe(side: 0 | 1): void {
+      if (side === 0) serveHostPending = true
+      else serveGuestPending = true
+    },
+    setPauseVote(side: 0 | 1, vote: boolean): void {
+      if (side === 0) state.pauseVoteHost = vote
+      else state.pauseVoteGuest = vote
+      // practice: the CPU is always agreeable — mirror the player's vote
+      if (mode === 'local') state.pauseVoteHost = state.pauseVoteGuest
+    },
+    getState(): GameState {
+      return state
+    },
+    applySnapshot(s: Partial<GameState>): void {
+      // drop stale snapshots by seq when available
+      if (typeof s.seq === 'number' && s.seq < state.seq) return
+      state = {
+        ...state,
+        ...s,
+        ball: s.ball ? {...state.ball, ...s.ball} : state.ball,
+        host: s.host ? {...state.host, ...s.host} : state.host,
+        guest: s.guest ? {...state.guest, ...s.guest} : state.guest,
+      }
+    },
+  }
+
+  return handle
+}
+
+function localBand(mode: GameMode): {min: number; max: number} {
+  return mode === 'host'
+    ? {min: FIELD.hostYMin, max: FIELD.hostYMax}
+    : {min: FIELD.guestYMin, max: FIELD.guestYMax}
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v
+}

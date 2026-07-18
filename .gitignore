@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+*.log
+
+# agent guidance stays local
+CLAUDE.md
+.claude/
+
+# tsc build artifacts
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
