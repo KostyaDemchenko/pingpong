@@ -93,6 +93,11 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let serveGuestPending = false
   let aiServeTicks = 0
 
+  // (guest) smoothed display positions: snapshots arrive at ~30Hz but we render
+  // at 60fps — extrapolate from the last snapshot and ease toward it
+  let lastSnapAt = 0
+  const disp = {bx: 0.5, by: 0.5, bz: 0, hx: 0.5, hy: FIELD.hostPaddleY as number}
+
   const dpr = () => Math.max(1, Math.min(window.devicePixelRatio || 1, 3))
 
   function resize(): void {
@@ -180,6 +185,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       accum = 0
       state.guest.x = localX
       state.guest.y = localY
+      smoothGuestView(now, frameDt)
     }
 
     if (state.scoreHost !== prevHost || state.scoreGuest !== prevGuest) {
@@ -194,19 +200,50 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   const vx = (nx: number) => (flip ? 1 - nx : nx)
   const vy = (ny: number) => (flip ? 1 - ny : ny)
 
+  /**
+   * (guest) pull the displayed ball & remote paddle toward the extrapolated
+   * snapshot state — critically-damped, with a hard snap on teleports (serve
+   * resets) so smoothing never rubber-bands across the table.
+   */
+  function smoothGuestView(now: number, frameDt: number): void {
+    const b = state.ball
+    const el = lastSnapAt ? Math.min(0.12, (now - lastSnapAt) / 1000) : 0
+    const tx = b.x + b.vx * el
+    const ty = b.y + b.vy * el
+    const tz = Math.max(0, b.z + b.vz * el - 0.5 * FIELD.gravity * el * el)
+    const a = 1 - Math.pow(0.0005, frameDt)
+    if (Math.hypot(tx - disp.bx, ty - disp.by) > 0.15) {
+      disp.bx = tx
+      disp.by = ty
+      disp.bz = tz
+    } else {
+      disp.bx += (tx - disp.bx) * a
+      disp.by += (ty - disp.by) * a
+      disp.bz += (tz - disp.bz) * a
+    }
+    disp.hx += (state.host.x - disp.hx) * a
+    disp.hy += (state.host.y - disp.hy) * a
+  }
+
   function render(): void {
     drawTable(ctx!, W, H)
     // my paddle is always the near/green one in MY view; opponent far/red.
     const far = flip ? state.guest : state.host
     const near = flip ? state.host : state.guest
-    drawPaddle(ctx!, W, H, vx(far.x), vy(far.y), false)
+    // guest renders the SMOOTHED remote state, not raw 30Hz snapshots
+    const farX = mode === 'guest' ? disp.hx : far.x
+    const farY = mode === 'guest' ? disp.hy : far.y
+    const bX = mode === 'guest' ? disp.bx : state.ball.x
+    const bY = mode === 'guest' ? disp.by : state.ball.y
+    const bZ = mode === 'guest' ? disp.bz : state.ball.z
+    drawPaddle(ctx!, W, H, vx(farX), vy(farY), false)
     drawBall(
       ctx!,
       W,
       H,
-      vx(state.ball.x),
-      vy(state.ball.y),
-      state.ball.z,
+      vx(bX),
+      vy(bY),
+      bZ,
       flip ? -state.ball.vx : state.ball.vx,
       flip ? -state.ball.vy : state.ball.vy,
     )
@@ -266,6 +303,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     applySnapshot(s: Partial<GameState>): void {
       // drop stale snapshots by seq when available
       if (typeof s.seq === 'number' && s.seq < state.seq) return
+      lastSnapAt = performance.now()
       state = {
         ...state,
         ...s,

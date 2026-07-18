@@ -54,6 +54,7 @@ export function startQuickMatch(onMatched: (privateCode: string, opponentId: str
   const match = (opponentId: string): void => {
     if (done) return
     done = true
+    window.clearInterval(retry)
     const code = [selfId, opponentId].sort().join('').slice(0, 24)
     void room.leave()
     onMatched(code, opponentId)
@@ -67,9 +68,13 @@ export function startQuickMatch(onMatched: (privateCode: string, opponentId: str
   })
 
   propose() // in case peers are already present on join
+  // re-propose on a timer: a proposal sent before the other side's handler was
+  // registered (or lost on the wire) would otherwise deadlock the pairing
+  const retry = window.setInterval(propose, 2000)
 
   return {
     cancel: () => {
+      window.clearInterval(retry)
       if (done) return
       done = true
       void room.leave()

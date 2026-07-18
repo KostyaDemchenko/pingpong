@@ -132,6 +132,8 @@ export interface PongRoom {
   serve: Action<boolean>
   /** guest -> host: the guest's current pause vote (host feeds its sim) */
   pauseVote: Action<boolean>
+  /** both ways: each peer's nickname, sent on connect */
+  name: Action<string>
   /** Called when the (single) opponent connects; provides host election result. */
   onOpponentJoin: (cb: (peerId: string, amHost: boolean) => void) => void
   onOpponentLeave: (cb: (peerId: string) => void) => void
@@ -153,6 +155,7 @@ export function createRoom(roomCode: string): PongRoom {
     rematch: defineAction<boolean>(room, 'rematch'),
     serve: defineAction<boolean>(room, 'serve'),
     pauseVote: defineAction<boolean>(room, 'pauseVote'),
+    name: defineAction<string>(room, 'name'),
     onOpponentJoin(cb) {
       // onPeerJoin is an assignable callback property in Trystero, not a method.
       room.onPeerJoin = (peerId) => {

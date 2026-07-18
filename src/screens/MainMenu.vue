@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import {ref} from 'vue'
+import {onBeforeUnmount, onMounted, ref} from 'vue'
 import Wordmark from '@/components/Wordmark.vue'
 import PixelButton from '@/components/PixelButton.vue'
 import PixelPanel from '@/components/PixelPanel.vue'
 import {useGameFlow} from '@/composables/useGameFlow'
+import {startPresence} from '@/net/presence'
 
 const flow = useGameFlow()
 const code = ref('')
+
+// real online counter (people currently on the menu, incl. us)
+const online = ref(0)
+let stopPresence: (() => void) | null = null
+onMounted(() => {
+  stopPresence = startPresence((n) => (online.value = n))
+})
+onBeforeUnmount(() => stopPresence?.())
 
 function onJoin() {
   const c = code.value.trim()
@@ -75,8 +84,13 @@ function onJoin() {
         OR PRACTICE VS AI
       </button>
 
-      <!-- Footer (online counter removed until there's a real presence source) -->
-      <div class="flex items-center justify-center">
+      <!-- Footer — REAL online count (peers in the presence room) -->
+      <div class="flex flex-wrap items-center justify-center gap-x-md gap-y-1">
+        <div v-if="online > 0" class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 bg-brand"></span>
+          <span class="font-body text-text-secondary text-xs">{{ online }} ONLINE</span>
+        </div>
+        <span v-if="online > 0" class="font-body text-text-muted text-xs hidden sm:inline">·</span>
         <span class="font-body text-text-muted text-xs">FIRST TO 11 POINTS WINS</span>
       </div>
     </div>

@@ -53,6 +53,9 @@ const REASON_LABEL: Record<string, string> = {
   missed: 'MISS',
 }
 
+// --- opponent disconnected mid-match ---
+const oppLeft = ref(false)
+
 // --- mutual-vote pause ---
 const myPauseVote = computed(() => (mySide.value === 0 ? ui.voteHost : ui.voteGuest))
 const oppPauseVote = computed(() => (mySide.value === 0 ? ui.voteGuest : ui.voteHost))
@@ -196,12 +199,16 @@ onMounted(() => {
 
   game.start()
 
-  // If the opponent disconnects mid-match, bail back to the menu.
+  // If the opponent disconnects mid-match: freeze the game and show an
+  // overlay instead of silently dumping the player back to the menu.
   if (flow.state.mode === 'p2p') {
     stopStatusWatch = watch(
       () => net.state.status,
       (s) => {
-        if (s !== 'connected') leave()
+        if (s !== 'connected' && !oppLeft.value) {
+          oppLeft.value = true
+          game?.stop()
+        }
       },
     )
   }
@@ -292,8 +299,17 @@ onBeforeUnmount(() => {
         <span class="font-display text-sm leading-none">{{ toast.text }}</span>
       </div>
 
+      <!-- opponent left mid-match -->
+      <div v-if="oppLeft" class="absolute inset-0 z-20 grid place-items-center bg-pixel-black/70">
+        <div class="flex flex-col items-center gap-5 px-8 py-7 bg-bg-surface border-2 border-danger pixel-shadow-lg">
+          <span class="font-display text-danger text-lg">OPPONENT LEFT</span>
+          <span class="font-body text-text-secondary text-[11px]">{{ flow.state.oppName }} DISCONNECTED FROM THE MATCH</span>
+          <PixelButton variant="primary" @click="leave">BACK TO MENU</PixelButton>
+        </div>
+      </div>
+
       <!-- mutual-vote pause overlay -->
-      <div v-if="ui.paused" class="absolute inset-0 z-10 grid place-items-center bg-pixel-black/70">
+      <div v-if="ui.paused && !oppLeft" class="absolute inset-0 z-10 grid place-items-center bg-pixel-black/70">
         <div class="flex flex-col items-center gap-5 px-8 py-7 bg-bg-surface border-2 border-border-strong pixel-shadow-lg">
           <span class="font-display text-text-primary text-xl">PAUSED</span>
           <div class="flex flex-col items-center gap-1.5 font-body text-[11px]">

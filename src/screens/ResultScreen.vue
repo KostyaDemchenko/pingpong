@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed} from 'vue'
+import {computed, onBeforeUnmount, onMounted, reactive, watch} from 'vue'
 import PixelButton from '@/components/PixelButton.vue'
 import {useGameFlow} from '@/composables/useGameFlow'
 import {useNetwork} from '@/net/useNetwork'
@@ -8,15 +8,63 @@ const flow = useGameFlow()
 const net = useNetwork()
 const won = computed(() => flow.state.result === 'win')
 
-// ---- Wiring (preserved exactly) --------------------------------------------
+// ---- Same-room rematch handshake -------------------------------------------
+// Both players click REMATCH -> the match restarts in the SAME room (no new
+// code). The sender re-sends every second until answered, so a click landing
+// before the other side's handler is registered can't get lost.
+const rm = reactive({mine: false, theirs: false, oppGone: false})
+let resend = 0
+let stopStatusWatch: (() => void) | null = null
+
+onMounted(() => {
+  if (flow.state.mode !== 'p2p') return
+  const room = net.room()
+  if (!room || net.state.status !== 'connected') {
+    rm.oppGone = true
+    return
+  }
+  room.rematch.onMessage(() => {
+    rm.theirs = true
+    maybeStart()
+  })
+  stopStatusWatch = watch(
+    () => net.state.status,
+    (s) => {
+      if (s !== 'connected') rm.oppGone = true
+    },
+  )
+})
+onBeforeUnmount(() => {
+  window.clearInterval(resend)
+  stopStatusWatch?.()
+})
+
+function maybeStart() {
+  if (rm.mine && rm.theirs) {
+    window.clearInterval(resend)
+    flow.go('game')
+  }
+}
+
 function rematch() {
   if (flow.state.mode === 'local') {
     flow.practice()
     return
   }
-  // TODO: true same-opponent rematch via the `rematch` action; for now a fresh room.
-  net.disconnect()
-  flow.hostRoom()
+  if (rm.oppGone || !net.room()) {
+    // opponent is gone — fall back to hosting a fresh room
+    net.disconnect()
+    flow.hostRoom()
+    return
+  }
+  rm.mine = true
+  net.room()!.rematch.send(true)
+  window.clearInterval(resend)
+  resend = window.setInterval(() => {
+    if (net.room() && !rm.theirs) net.room()!.rematch.send(true)
+    else window.clearInterval(resend)
+  }, 1000)
+  maybeStart()
 }
 
 function toMenu() {
@@ -28,7 +76,20 @@ function toMenu() {
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const youScore = computed(() => pad2(flow.state.finalScore?.mine ?? (won.value ? 11 : 0)))
 const oppScore = computed(() => pad2(flow.state.finalScore?.theirs ?? (won.value ? 0 : 11)))
-const rematchLabel = computed(() => (flow.state.mode === 'local' ? 'PLAY AGAIN' : 'REMATCH'))
+const rematchLabel = computed(() => {
+  if (flow.state.mode === 'local') return 'PLAY AGAIN'
+  if (rm.oppGone) return 'NEW ROOM'
+  if (rm.mine && !rm.theirs) return 'WAITING…'
+  if (!rm.mine && rm.theirs) return 'ACCEPT REMATCH'
+  return 'REMATCH'
+})
+const rematchHint = computed(() => {
+  if (flow.state.mode !== 'p2p') return ''
+  if (rm.oppGone) return `${flow.state.oppName} LEFT — START A NEW ROOM`
+  if (!rm.mine && rm.theirs) return `${flow.state.oppName} WANTS A REMATCH!`
+  if (rm.mine && !rm.theirs) return `WAITING FOR ${flow.state.oppName}…`
+  return ''
+})
 
 // Placeholder end-of-game stats (mirrors the design values).
 const stats = [
@@ -196,6 +257,13 @@ const RAIN = makePieces(22, ['var(--color-danger)', 'var(--color-text-muted)'], 
     <div class="relative z-10 flex flex-col sm:flex-row gap-4 w-full max-w-[320px] sm:max-w-none sm:w-auto">
       <PixelButton class="w-full sm:w-auto" @click="rematch">{{ rematchLabel }}</PixelButton>
       <PixelButton variant="secondary" class="w-full sm:w-auto" @click="toMenu">BACK TO MENU</PixelButton>
+      <span
+        v-if="rematchHint"
+        class="w-full text-center font-body text-[11px]"
+        :class="rm.oppGone ? 'text-danger' : 'text-brand'"
+      >
+        {{ rematchHint }}
+      </span>
     </div>
   </div>
 </template>
