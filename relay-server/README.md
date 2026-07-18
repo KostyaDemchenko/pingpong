@@ -15,6 +15,12 @@ every push that touches `relay-server/`.
 
 ## One-time setup
 
+> ⚠️ **VPS datacenter LOCATION is the #1 criterion — before price.** Game
+> traffic for TURN-relayed pairs flows through this box both ways: a US server
+> for EU players = 350ms+ ping and a slideshow for the guest (learned the hard
+> way — Namecheap VPS only offers Phoenix, AZ). Pick the region closest to your
+> players, e.g. Hetzner Falkenstein/Helsinki for Europe.
+
 ### 1. Cloudflare DNS (domain already on Cloudflare)
 
 | Record | Name    | Value    | Proxy                                     |
