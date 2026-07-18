@@ -40,7 +40,6 @@ services:
       --max-port=65535
       --no-cli
       --no-tlsv1
-      --no-tlsv1_1
 
 volumes:
   caddy_data:
