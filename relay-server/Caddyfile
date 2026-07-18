@@ -1,0 +1,6 @@
+{$DOMAIN} {
+	tls {
+		dns cloudflare {$CF_API_TOKEN}
+	}
+	reverse_proxy relay:8765
+}

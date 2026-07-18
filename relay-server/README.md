@@ -1,121 +1,88 @@
-# Pixel Pong relay server
+# Pixel Pong relay server (Docker + Cloudflare)
 
-Self-hosted signaling for the game's P2P connections. Public Nostr relays
-increasingly reject unknown keys (web-of-trust filters) or rate-limit our
-signaling traffic — this tiny relay removes that dependency entirely.
+Self-hosted signaling for the game's P2P connections + TURN, as one
+`docker compose` stack on a cheap VPS:
 
-Two services run on one cheap VPS (~€4/mo is plenty — signaling traffic is
-tiny, game data stays peer-to-peer):
-
-- **ws-relay** (this folder) — brokers the WebRTC handshake (SDP exchange).
+- **relay** — tiny WebSocket relay (Trystero ws-relay strategy) brokering the
+  WebRTC handshake; game traffic stays peer-to-peer, e2e-encrypted.
+- **caddy** — TLS termination for `wss://`. Built with the cloudflare-dns
+  plugin, so certificates are issued via DNS-01 through the Cloudflare API —
+  works even with the hostname behind Cloudflare's proxy.
 - **coturn** — TURN proxy for peer pairs whose NATs block direct WebRTC.
 
-## 1. Get a VPS + domain name
+Deploys automatically from GitHub (`.github/workflows/deploy-relay.yml`) on
+every push that touches `relay-server/`.
 
-- Any small VPS: Hetzner CX22 (~€3.8/mo) / CAX11 (~€3.3/mo), Ubuntu 24.04.
-- Point a DNS A-record at it, e.g. `relay.yourdomain.com` → `<VPS IP>`.
-  No domain? `relay.<VPS-IP-with-dashes>.sslip.io` resolves automatically
-  (e.g. `relay.203-0-113-7.sslip.io`) and works with Caddy's auto-TLS.
+## One-time setup
 
-## 2. Install Node 22 + Caddy
+### 1. Cloudflare DNS (domain already on Cloudflare)
 
-```sh
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs caddy
-```
+| Record | Name    | Value    | Proxy                                     |
+| ------ | ------- | -------- | ----------------------------------------- |
+| A      | `relay` | VPS IP   | proxied (orange) is OK — WS goes through  |
+| A      | `turn`  | VPS IP   | **DNS only (grey)! CF can't proxy TURN**  |
 
-## 3. Deploy the relay
+Also: SSL/TLS mode → **Full (strict)**.
 
-```sh
-sudo mkdir -p /opt/pixel-pong-relay
-# copy server.mjs + package.json from this folder to /opt/pixel-pong-relay, then:
-cd /opt/pixel-pong-relay && npm install
-```
+### 2. Cloudflare API token (for Caddy's certificates)
 
-`/etc/systemd/system/pixel-pong-relay.service`:
+My Profile → API Tokens → Create Token → template **"Edit zone DNS"**, scoped
+to the `pixel-pong.online` zone. Goes into `.env` as `CF_API_TOKEN`.
 
-```ini
-[Unit]
-Description=Pixel Pong ws-relay
-After=network.target
-
-[Service]
-Environment=PORT=8765
-ExecStart=/usr/bin/node /opt/pixel-pong-relay/server.mjs
-Restart=always
-User=www-data
-
-[Install]
-WantedBy=multi-user.target
-```
+### 3. VPS bootstrap (Ubuntu 24.04, SSH by key)
 
 ```sh
-sudo systemctl enable --now pixel-pong-relay
+curl -fsSL https://get.docker.com | sh
+git clone https://github.com/KostyaDemchenko/pingpong.git /opt/pingpong
+cd /opt/pingpong/relay-server
+cp .env.example .env && nano .env   # fill every value
+docker compose up -d --build
+docker compose ps                   # relay + caddy + coturn all "Up"
 ```
 
-`/etc/caddy/Caddyfile` (Caddy fetches the TLS cert automatically):
-
-```
-relay.yourdomain.com {
-    reverse_proxy localhost:8765
-}
-```
+### 4. Firewall (ufw + hoster's panel if any)
 
 ```sh
-sudo systemctl reload caddy
+ufw allow OpenSSH
+ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 443/udp
+ufw allow 3478/tcp && ufw allow 3478/udp
+ufw allow 49152:65535/udp
+ufw enable
 ```
 
-## 4. TURN (coturn) on the same VPS
+### 5. GitHub secrets (repo → Settings → Secrets → Actions)
 
-```sh
-sudo apt-get install -y coturn
-```
+- `VPS_HOST` — server IP (the raw IP, not the proxied hostname)
+- `VPS_USER` — ssh user (e.g. `root`)
+- `VPS_SSH_KEY` — private key; its public half must be in
+  `~/.ssh/authorized_keys` on the VPS (password auth is disabled)
 
-`/etc/turnserver.conf` (replace the placeholders):
+After that, pushes touching `relay-server/` redeploy the stack automatically;
+manual runs via Actions → "Deploy relay" → Run workflow.
 
-```
-listening-port=3478
-fingerprint
-lt-cred-mech
-user=pong:CHANGE_ME_STRONG_PASSWORD
-realm=relay.yourdomain.com
-no-cli
-no-tlsv1
-no-tlsv1_1
-```
-
-Enable and open the firewall:
-
-```sh
-echo 'TURNSERVER_ENABLED=1' | sudo tee /etc/default/coturn
-sudo systemctl enable --now coturn
-sudo ufw allow 3478/tcp && sudo ufw allow 3478/udp
-sudo ufw allow 49152:65535/udp   # TURN media relay range
-```
-
-## 5. Point the game at your servers
-
-Set these env vars in Vercel (Project → Settings → Environment Variables)
-and redeploy:
+### 6. Vercel env vars (Production) + Redeploy
 
 ```
-VITE_RELAY_URLS=wss://relay.yourdomain.com
-VITE_TURN_URL=turn:relay.yourdomain.com:3478
+VITE_RELAY_URLS=wss://relay.pixel-pong.online
+VITE_TURN_URL=turn:turn.pixel-pong.online:3478
 VITE_TURN_USER=pong
-VITE_TURN_PASS=CHANGE_ME_STRONG_PASSWORD
+VITE_TURN_PASS=<same as TURN_PASS in .env>
 ```
 
-Without `VITE_RELAY_URLS` the client falls back to public Nostr relays
-(fine for local dev, unreliable in production).
+Note `VITE_TURN_URL` uses the **turn.** subdomain (grey-cloud). Without
+`VITE_RELAY_URLS` the client falls back to public Nostr relays — fine for
+local dev, unreliable in production.
 
-Local test against a local relay:
+## Ops cheatsheet
 
 ```sh
-# terminal 1
-node relay-server/server.mjs
-# terminal 2
-VITE_RELAY_URLS=ws://localhost:8765 npm run dev
+cd /opt/pingpong/relay-server
+docker compose logs -f relay      # signaling connections
+docker compose logs -f caddy      # cert issuance / proxy
+docker compose logs -f coturn     # TURN sessions
+docker compose up -d --build      # manual redeploy
 ```
 
-(`ws://` only works from `http://localhost`; production pages are https and
-need the `wss://` URL via Caddy.)
+Local test without TLS: `node server.mjs`, then run the app with
+`VITE_RELAY_URLS=ws://localhost:8765 npm run dev` (`ws://` only works from
+`http://localhost`; production needs the `wss://` URL).

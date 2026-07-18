@@ -11,6 +11,9 @@ dist-ssr
 CLAUDE.md
 .claude/
 
+# secrets
+.env
+
 # tsc build artifacts
 *.tsbuildinfo
 vite.config.js

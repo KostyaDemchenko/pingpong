@@ -1,0 +1,29 @@
+# Redeploys the relay stack on the VPS whenever relay-server/ changes on main
+# (or manually via the Actions tab). Needs repo secrets:
+#   VPS_HOST     - server IP (NOT the Cloudflare-proxied hostname)
+#   VPS_USER     - ssh user (e.g. root)
+#   VPS_SSH_KEY  - private key whose public half is in ~/.ssh/authorized_keys
+name: Deploy relay
+
+on:
+  push:
+    branches: [main]
+    paths: ['relay-server/**']
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/pingpong
+            git pull --ff-only
+            cd relay-server
+            docker compose up -d --build
+            docker compose ps

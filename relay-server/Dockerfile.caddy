@@ -1,0 +1,8 @@
+# Caddy + cloudflare-dns plugin: TLS certs via DNS-01 through the Cloudflare
+# API, which works even when the hostname is PROXIED (orange cloud) — plain
+# HTTP-01 would be flaky behind the proxy.
+FROM caddy:2-builder AS builder
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+
+FROM caddy:2
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
