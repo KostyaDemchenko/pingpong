@@ -145,11 +145,12 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
   const oldGuestX = state.guest.x
   const oldGuestY = state.guest.y
 
-  // paddles follow inputs immediately (host authoritative; guest predicts locally)
+  // paddles follow inputs immediately (host authoritative; guest predicts
+  // locally). x spans the FULL table width so edge balls stay reachable.
   const halfW = state.host.width / 2
-  state.host.x = clamp(inputs.hostX, halfW, 1 - halfW)
+  state.host.x = clamp(inputs.hostX, 0, 1)
   state.host.y = clamp(inputs.hostY, FIELD.hostYMin, FIELD.hostYMax)
-  state.guest.x = clamp(inputs.guestX, halfW, 1 - halfW)
+  state.guest.x = clamp(inputs.guestX, 0, 1)
   state.guest.y = clamp(inputs.guestY, FIELD.guestYMin, FIELD.guestYMax)
 
   // paddle velocities (units/sec, clamped) — drive spin & shot power
@@ -200,15 +201,6 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
 
   const b = state.ball
 
-  // sweep: the paddle PLANE moved onto/past the ball this tick (player reached
-  // for it) — without this, pulling the paddle toward an incoming ball whiffs
-  // because the ball never "crosses" the moving plane.
-  if (b.vy < 0 && oldHostY < b.y && state.host.y >= b.y) {
-    tryPaddleHit(state, 0, halfW, 1, pv.hostVx, pv.hostVy)
-  } else if (b.vy > 0 && oldGuestY > b.y && state.guest.y <= b.y) {
-    tryPaddleHit(state, 1, halfW, -1, pv.guestVx, pv.guestVy)
-  }
-
   // --- rally integration, sub-stepped against tunneling ---
   const maxV = Math.max(Math.abs(b.vx), Math.abs(b.vy), Math.abs(b.vz))
   const n = clamp(Math.ceil((maxV * dtSec) / FIELD.maxStepDisp), 1, FIELD.maxSubSteps)
@@ -226,7 +218,6 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
  */
 function subStep(state: GameState, dt: number, halfW: number, pv: PaddleVel): boolean {
   const b = state.ball
-  const prevY = b.y
 
   // Magnus-ish curve: spin bends the sideways velocity, then fades
   b.vx += b.spin * FIELD.spinCurve * dt
@@ -268,13 +259,12 @@ function subStep(state: GameState, dt: number, halfW: number, pv: PaddleVel): bo
     return true
   }
 
-  // crossed the host paddle's plane going far (vy < 0): try the return
-  if (b.vy < 0 && prevY > state.host.y && b.y <= state.host.y) {
+  // paddle contact — PROXIMITY, not plane-crossing: the return connects
+  // whenever the incoming ball is near the paddle, so late hits (after the
+  // ball already passed your depth and you reach back for it) work naturally.
+  if (b.vy < 0 && paddleReaches(state, 0)) {
     if (tryPaddleHit(state, 0, halfW, 1, pv.hostVx, pv.hostVy)) return false
-  }
-
-  // crossed the guest paddle's plane going near (vy > 0): try the return
-  if (b.vy > 0 && prevY < state.guest.y && b.y >= state.guest.y) {
+  } else if (b.vy > 0 && paddleReaches(state, 1)) {
     if (tryPaddleHit(state, 1, halfW, -1, pv.guestVx, pv.guestVy)) return false
   }
 
@@ -286,6 +276,22 @@ function subStep(state: GameState, dt: number, halfW: number, pv: PaddleVel): bo
   }
 
   return false
+}
+
+/**
+ * Is the ball within the paddle's reach in table DEPTH? Matches against the
+ * ball's true position AND its VISUAL position — the rendered sprite is lifted
+ * by z toward the viewer's far side, and players aim at what they see, so a
+ * paddle placed "under the sprite" must also connect. Sub-stepping keeps the
+ * per-step displacement well below the hitDepth window, so nothing tunnels.
+ */
+function paddleReaches(state: GameState, hitter: 0 | 1): boolean {
+  const p = hitter === 0 ? state.host : state.guest
+  const b = state.ball
+  // for the guest's (bottom) view the lift shifts the sprite toward smaller y;
+  // for the host's flipped view — toward larger y
+  const visualY = hitter === 0 ? b.y + b.z * FIELD.aimLift : b.y - b.z * FIELD.aimLift
+  return Math.abs(b.y - p.y) <= FIELD.hitDepth || Math.abs(visualY - p.y) <= FIELD.hitDepth
 }
 
 /**

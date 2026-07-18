@@ -94,7 +94,11 @@ export const FIELD = {
   restitution: 0.82, // energy kept on a felt bounce (0.7 made the 2nd bounce feel dead)
   serveVz: 1.0, // upward launch velocity when the ball is served
   returnVz: 1.05, // upward velocity added to a paddle return so it arcs back
-  maxHitHeight: 0.3, // ball must be at/below this height at the plane to be returnable
+  maxHitHeight: 0.35, // ball must be at/below this height to be returnable
+  // --- proximity hit model (no more plane-crossing-only registration) ---
+  hitDepth: 0.045, // how close in table depth the paddle must be to connect
+  aimLift: 0.6, // players aim at the RENDERED ball (lifted by z) — also match
+  // the paddle against the ball's visual position, shifted by z * aimLift
   // --- manual serve ---
   serveBallLead: 0.05, // how far in front of the server's paddle the ball waits
   aiServeDelayTicks: 50, // practice AI serves ~0.8s after the serve phase begins
