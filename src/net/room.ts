@@ -81,13 +81,37 @@ function turnConfig() {
   ]
 }
 
+/** Details Trystero reports when a peer fails to join (bad password, handshake
+ * timeout, or SDP exchanged but ICE never connected → TURN missing/broken). */
+export interface JoinErrorDetails {
+  error: string
+  appId: string
+  roomId: string
+  peerId: string
+}
+
 /** Join a Trystero room via the configured strategy (game room & quick-match). */
-export function netJoinRoom(extra: {password?: string}, roomId: string): Room {
+export function netJoinRoom(
+  extra: {password?: string},
+  roomId: string,
+  onJoinError?: (details: JoinErrorDetails) => void,
+): Room {
   const cfg = {appId: APP_ID, turnConfig: turnConfig(), ...extra}
-  if (USE_OWN_RELAY) {
-    return joinWsRelayRoom({...cfg, relayConfig: {urls: ENV_RELAYS!}}, roomId) as unknown as Room
+  const callbacks = {
+    onJoinError: (details: JoinErrorDetails) => {
+      // always log: this is the ONLY signal when WebRTC can't connect a pair
+      console.warn('[pixel-pong net] join error:', details.error, details)
+      onJoinError?.(details)
+    },
   }
-  return joinNostrRoom({...cfg, relayConfig: {urls: NOSTR_RELAY_URLS}}, roomId)
+  if (USE_OWN_RELAY) {
+    return joinWsRelayRoom(
+      {...cfg, relayConfig: {urls: ENV_RELAYS!}},
+      roomId,
+      callbacks,
+    ) as unknown as Room
+  }
+  return joinNostrRoom({...cfg, relayConfig: {urls: NOSTR_RELAY_URLS}}, roomId, callbacks)
 }
 
 // ---- Wire message shapes (keep tiny; hot path runs many times/sec) ----
@@ -141,10 +165,13 @@ export interface PongRoom {
   leave: () => void
 }
 
-export function createRoom(roomCode: string): PongRoom {
+export function createRoom(
+  roomCode: string,
+  onJoinError?: (details: JoinErrorDetails) => void,
+): PongRoom {
   const code = roomCode.trim().toUpperCase()
   // password = code → only matching codes ever connect, SDP stays private.
-  const room = netJoinRoom({password: code}, code)
+  const room = netJoinRoom({password: code}, code, onJoinError)
 
   return {
     room,

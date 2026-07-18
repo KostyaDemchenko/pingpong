@@ -27,7 +27,11 @@ export function useNetwork() {
       state.opponentId = ''
       state.error = ''
       try {
-        pong = createRoom(code)
+        pong = createRoom(code, (details) => {
+          // surfaced in the Lobby UI — most commonly "ICE failed" = TURN issue
+          state.status = 'error'
+          state.error = `CONNECT FAILED: ${details.error}`.toUpperCase().slice(0, 60)
+        })
         state.status = 'waiting'
         const flow = useGameFlow()
         // real nickname exchange: apply theirs, send ours on join (twice — the

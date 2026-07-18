@@ -201,6 +201,16 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
 
   const b = state.ball
 
+  // swept contact: paddle INPUT jumps once per tick while the ball moves in
+  // sub-steps — a fast swing (power/spin hits!) can carry the paddle clean
+  // over the proximity window between two ticks. If the paddle plane crossed
+  // the ball's position this tick, that's a hit too.
+  if (b.vy < 0 && oldHostY < b.y && state.host.y >= b.y) {
+    tryPaddleHit(state, 0, halfW, 1, pv.hostVx, pv.hostVy)
+  } else if (b.vy > 0 && oldGuestY > b.y && state.guest.y <= b.y) {
+    tryPaddleHit(state, 1, halfW, -1, pv.guestVx, pv.guestVy)
+  }
+
   // --- rally integration, sub-stepped against tunneling ---
   const maxV = Math.max(Math.abs(b.vx), Math.abs(b.vy), Math.abs(b.vz))
   const n = clamp(Math.ceil((maxV * dtSec) / FIELD.maxStepDisp), 1, FIELD.maxSubSteps)
