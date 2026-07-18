@@ -17,7 +17,7 @@
  * canonical space has host far / guest near, so in host mode the whole view is
  * flipped (nx -> 1-nx, ny -> 1-ny) for both rendering AND pointer input.
  */
-import type {GameState} from './types'
+import type {GameState, HotSnapshot} from './types'
 import {FIELD} from './types'
 import {newGame, step, startMatch as engineStartMatch, type Inputs} from './engine'
 import {drawBall, drawPaddle, drawTable, unproject} from './render'
@@ -34,8 +34,15 @@ export interface GameHandle {
   setPointer(px: number, py: number): void
   /** The local player's paddle in MODEL coords (for sending over the net). */
   getLocalPaddle(): {x: number; y: number}
-  /** (host mode) Set the remote guest's paddle center in model coords. */
-  setRemotePaddle(x: number, y: number): void
+  /** (host mode) Set the remote guest's paddle center in model coords.
+   * `t` is the guest's send timestamp — echoed back for RTT measurement. */
+  setRemotePaddle(x: number, y: number, t?: number): void
+  /** (host mode) Compact 30Hz snapshot for the wire (~300B vs multi-KB state). */
+  getHotSnapshot(): HotSnapshot
+  /** (guest mode) Apply a compact snapshot (hot path). */
+  applyHotSnapshot(h: HotSnapshot): void
+  /** (guest mode) Smoothed round-trip time in ms (0 until measured). */
+  getPing(): number
   /** (host/local) Publish the coin-flip result while still in the 'coin' phase
    * so guest overlays can reveal the same winner from snapshots. */
   setCoinResult(firstServer: 0 | 1): void
@@ -97,6 +104,10 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   // at 60fps — extrapolate from the last snapshot and ease toward it
   let lastSnapAt = 0
   const disp = {bx: 0.5, by: 0.5, bz: 0, hx: 0.5, hy: FIELD.hostPaddleY as number}
+  // (host) latest guest input timestamp, echoed in hot snapshots for RTT
+  let lastGuestInputT = 0
+  // (guest) smoothed RTT estimate in ms
+  let rttEma = 0
 
   const dpr = () => Math.max(1, Math.min(window.devicePixelRatio || 1, 3))
 
@@ -207,11 +218,12 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
    */
   function smoothGuestView(now: number, frameDt: number): void {
     const b = state.ball
-    const el = lastSnapAt ? Math.min(0.12, (now - lastSnapAt) / 1000) : 0
+    // extrapolate up to 250ms ahead — TURN-relayed pairs see real latency
+    const el = lastSnapAt ? Math.min(0.25, (now - lastSnapAt) / 1000) : 0
     const tx = b.x + b.vx * el
     const ty = b.y + b.vy * el
     const tz = Math.max(0, b.z + b.vz * el - 0.5 * FIELD.gravity * el * el)
-    const a = 1 - Math.pow(0.0005, frameDt)
+    const a = 1 - Math.pow(0.00002, frameDt)
     if (Math.hypot(tx - disp.bx, ty - disp.by) > 0.15) {
       disp.bx = tx
       disp.by = ty
@@ -277,9 +289,45 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     getLocalPaddle(): {x: number; y: number} {
       return {x: localX, y: localY}
     },
-    setRemotePaddle(x: number, y: number): void {
+    setRemotePaddle(x: number, y: number, t = 0): void {
       remoteGuestX = clamp01(x)
       remoteGuestY = Math.min(Math.max(y, FIELD.guestYMin), FIELD.guestYMax)
+      if (t > 0) lastGuestInputT = t
+    },
+    getHotSnapshot(): HotSnapshot {
+      const b = state.ball
+      return {
+        seq: state.seq,
+        phase: state.phase,
+        serving: state.serving,
+        paused: state.paused,
+        scoreHost: state.scoreHost,
+        scoreGuest: state.scoreGuest,
+        b: {x: b.x, y: b.y, vx: b.vx, vy: b.vy, z: b.z, vz: b.vz, spin: b.spin},
+        hx: state.host.x,
+        hy: state.host.y,
+        et: lastGuestInputT,
+      }
+    },
+    applyHotSnapshot(h: HotSnapshot): void {
+      if (h.seq < state.seq) return
+      lastSnapAt = performance.now()
+      state.seq = h.seq
+      state.phase = h.phase
+      state.serving = h.serving
+      state.paused = h.paused
+      state.scoreHost = h.scoreHost
+      state.scoreGuest = h.scoreGuest
+      state.ball = {...state.ball, ...h.b}
+      state.host.x = h.hx
+      state.host.y = h.hy
+      if (h.et > 0) {
+        const rtt = performance.now() - h.et
+        if (rtt >= 0 && rtt < 5000) rttEma = rttEma ? rttEma * 0.8 + rtt * 0.2 : rtt
+      }
+    },
+    getPing(): number {
+      return Math.round(rttEma)
     },
     setCoinResult(firstServer: 0 | 1): void {
       state.firstServer = firstServer

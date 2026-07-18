@@ -38,6 +38,26 @@ export interface GameEvent {
   scoreGuest?: number
 }
 
+/**
+ * Compact 30Hz host->guest snapshot (~300 bytes). The FULL GameState (with
+ * events/stats/votes) goes over the wire only ~1/sec and on score changes —
+ * shipping the whole state at 30Hz caused multi-KB JSON per tick, which hurts
+ * badly when the pair is TURN-relayed.
+ */
+export interface HotSnapshot {
+  seq: number
+  phase: GameState['phase']
+  serving: 0 | 1
+  paused: boolean
+  scoreHost: number
+  scoreGuest: number
+  b: {x: number; y: number; vx: number; vy: number; z: number; vz: number; spin: number}
+  hx: number // host paddle
+  hy: number
+  /** echo of the guest's latest input timestamp — lets the guest measure RTT */
+  et: number
+}
+
 export interface GameState {
   ball: Ball
   host: Paddle // far/top player in the canonical (guest) view

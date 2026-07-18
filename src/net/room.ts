@@ -13,7 +13,7 @@
 import {joinRoom as joinNostrRoom, selfId} from 'trystero'
 import {joinRoom as joinWsRelayRoom} from '@trystero-p2p/ws-relay'
 import type {Room} from 'trystero'
-import type {GameState} from '@/game/types'
+import type {GameState, HotSnapshot} from '@/game/types'
 
 /** Authoritative snapshot sent host→guest is just the (small, serializable) GameState. */
 export type Snapshot = GameState
@@ -150,6 +150,8 @@ export interface PongRoom {
   selfId: string
   paddle: Action<PaddleInput>
   state: Action<Snapshot>
+  /** host -> guest, 30Hz: compact hot snapshot (full `state` goes ~1/sec) */
+  snap: Action<HotSnapshot>
   ready: Action<boolean>
   rematch: Action<boolean>
   /** guest -> host: "I clicked to serve" (host relays into its simulation) */
@@ -178,6 +180,7 @@ export function createRoom(
     selfId,
     paddle: defineAction<PaddleInput>(room, 'paddle'),
     state: defineAction<Snapshot>(room, 'state'),
+    snap: defineAction<HotSnapshot>(room, 'snap'),
     ready: defineAction<boolean>(room, 'ready'),
     rematch: defineAction<boolean>(room, 'rematch'),
     serve: defineAction<boolean>(room, 'serve'),

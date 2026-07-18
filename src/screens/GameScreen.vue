@@ -39,6 +39,7 @@ const ui = reactive({
   voteHost: false,
   voteGuest: false,
   log: [] as LogLine[],
+  ping: 0,
 })
 // history panel: collapsed shows the tail; hover/tap expands the full log
 const logExpanded = ref(false)
@@ -84,17 +85,23 @@ function showToast(mineScored: boolean) {
 
 let game: GameHandle | null = null
 let broadcast = 0
+let fullSync = 0
 let coinPoll = 0
 let uiPoll = 0
 let stopStatusWatch: (() => void) | null = null
 
+let lastPaddleSend = 0
 function onPointerMove(e: PointerEvent) {
   if (!game || !canvas.value) return
   const r = canvas.value.getBoundingClientRect()
   game.setPointer(e.clientX - r.left, e.clientY - r.top)
   if (mode === 'guest') {
+    // throttle to ~40/s — pointermove can fire 120+/s and flood a TURN relay
+    const now = performance.now()
+    if (now - lastPaddleSend < 25) return
+    lastPaddleSend = now
     const p = game.getLocalPaddle()
-    net.room()?.paddle.send({x: p.x, y: p.y, t: performance.now()})
+    net.room()?.paddle.send({x: p.x, y: p.y, t: now})
   }
 }
 
@@ -114,6 +121,10 @@ function teardown() {
     clearInterval(broadcast)
     broadcast = 0
   }
+  if (fullSync) {
+    clearInterval(fullSync)
+    fullSync = 0
+  }
   if (coinPoll) {
     clearInterval(coinPoll)
     coinPoll = 0
@@ -130,6 +141,9 @@ function handleScore(s: {host: number; guest: number}) {
   score.host = s.host
   score.guest = s.guest
   showToast(mineScored)
+  // push the full state (events/stats) right away so the guest's log & result
+  // screen don't wait for the next 1s full-sync tick
+  if (mode === 'host' && game) net.room()?.state.send(game.getState())
   // deuce rules live in the engine: the match ends only when phase === 'over'
   const st = game?.getState()
   if (st?.phase !== 'over') return
@@ -156,13 +170,18 @@ onMounted(() => {
 
   const room = net.room()
   if (mode === 'host' && room) {
-    room.paddle.onMessage((inp) => game?.setRemotePaddle(inp.x, inp.y))
+    room.paddle.onMessage((inp) => game?.setRemotePaddle(inp.x, inp.y, inp.t))
     room.serve.onMessage(() => game?.requestServe(1)) // guest's serve click
     room.pauseVote.onMessage((v) => game?.setPauseVote(1, v)) // guest's pause vote
+    // hot path: tiny snapshot at 30Hz; the FULL state (events/stats) only ~1/sec
     broadcast = window.setInterval(() => {
-      if (game) room.state.send(game.getState())
+      if (game) room.snap.send(game.getHotSnapshot())
     }, Math.round(1000 / FIELD.netBroadcastHz))
+    fullSync = window.setInterval(() => {
+      if (game) room.state.send(game.getState())
+    }, 1000)
   } else if (mode === 'guest' && room) {
+    room.snap.onMessage((h) => game?.applyHotSnapshot(h))
     room.state.onMessage((snap) => game?.applySnapshot(snap))
   }
 
@@ -175,6 +194,7 @@ onMounted(() => {
     ui.paused = st.paused
     ui.voteHost = st.pauseVoteHost
     ui.voteGuest = st.pauseVoteGuest
+    ui.ping = game?.getPing() ?? 0
     ui.log = st.events.slice(-30).map((ev) => {
       if (ev.kind === 'serve') return {text: `> ${sideName(ev.player)} SERVES`, mine: ev.player === mySide.value}
       const mineScore = iAmHost ? ev.scoreHost : ev.scoreGuest
@@ -229,8 +249,17 @@ onBeforeUnmount(() => {
 <template>
   <div class="relative h-full w-full flex flex-col bg-bg-base">
     <header class="flex items-center justify-between px-4 py-3">
-      <span class="font-body text-text-muted text-xs">
+      <span class="flex items-center gap-2 font-body text-text-muted text-xs">
         {{ flow.state.mode === 'local' ? 'PRACTICE' : `ROOM ${flow.state.roomCode}` }}
+        <template v-if="mode === 'guest' && ui.ping > 0">
+          <span
+            class="w-2 h-2"
+            :class="ui.ping < 100 ? 'bg-brand' : ui.ping < 220 ? 'bg-text-secondary' : 'bg-danger'"
+          ></span>
+          <span :class="ui.ping < 100 ? 'text-brand' : ui.ping < 220 ? 'text-text-secondary' : 'text-danger'">
+            PING {{ ui.ping }}MS
+          </span>
+        </template>
       </span>
       <div class="flex items-center gap-2 font-display text-sm">
         <span class="hidden sm:inline font-body text-[10px] text-brand truncate max-w-[80px]">{{ flow.state.myName }}</span>
