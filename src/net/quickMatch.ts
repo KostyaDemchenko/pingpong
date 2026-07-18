@@ -11,7 +11,7 @@
  */
 import {joinRoom, selfId} from 'trystero'
 import type {Room} from 'trystero'
-import {APP_ID} from './room'
+import {baseNetConfig} from './room'
 
 const QUICK_ROOM = 'PIXELPONG-QUICKMATCH'
 
@@ -21,7 +21,7 @@ export interface QuickMatchHandle {
 }
 
 export function startQuickMatch(onMatched: (privateCode: string, opponentId: string) => void): QuickMatchHandle {
-  const room: Room = joinRoom({appId: APP_ID}, QUICK_ROOM)
+  const room: Room = joinRoom(baseNetConfig(), QUICK_ROOM)
 
   // normalize makeAction across Trystero API shapes (object {send,onMessage} vs [send,get])
   const made = (room as {makeAction: (n: string) => unknown}).makeAction('propose')

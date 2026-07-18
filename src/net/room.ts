@@ -20,6 +20,47 @@ export type Snapshot = GameState
 /** Unique to THIS app — NOT the room code. Bump to invalidate old clients. */
 export const APP_ID = 'pixel_pong_v1'
 
+/**
+ * Fixed set of reliable, long-lived public Nostr relays — the SAME list for
+ * every client. Trystero's default list has ~50 entries, many flaky or dead
+ * (e.g. koru.bitcointxoko.org), and each client connects to a random subset —
+ * so two peers could end up with NO working relay in common and never meet
+ * (symptom in prod: "WebSocket connection to wss://… failed" + nobody joins).
+ * Passing explicit urls makes every client use this exact list.
+ */
+export const RELAY_URLS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://nostr.oxtr.dev',
+  'wss://nostr.mom',
+  'wss://offchain.pub',
+]
+
+/**
+ * Free public TURN (Open Relay / metered.ca) so peers behind strict NATs can
+ * still connect over the internet (Vercel prod = different networks; direct
+ * WebRTC often fails there while it works fine on one LAN). Data stays
+ * end-to-end encrypted through TURN. If this service ever gets flaky, swap in
+ * your own — Cloudflare Calls has a free TURN tier.
+ */
+export const TURN_CONFIG = [
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turns:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+]
+
+/** Shared Trystero config for BOTH the game room and quick-match. */
+export function baseNetConfig() {
+  return {appId: APP_ID, relayConfig: {urls: RELAY_URLS}, turnConfig: TURN_CONFIG}
+}
+
 // ---- Wire message shapes (keep tiny; hot path runs many times/sec) ----
 export interface PaddleInput {
   x: number // normalized paddle x-position 0..1 (portrait table)
@@ -72,7 +113,7 @@ export interface PongRoom {
 export function createRoom(roomCode: string): PongRoom {
   const code = roomCode.trim().toUpperCase()
   // password = code → only matching codes ever connect, SDP stays private.
-  const room = joinRoom({appId: APP_ID, password: code}, code)
+  const room = joinRoom({...baseNetConfig(), password: code}, code)
 
   return {
     room,
