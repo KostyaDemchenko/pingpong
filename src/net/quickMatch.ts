@@ -9,9 +9,9 @@
  * This is a correct, stable matching for the common (low-traffic) case; heavy
  * concurrency could mis-pair on a race — good enough for a first pass.
  */
-import {joinRoom, selfId} from 'trystero'
+import {selfId} from 'trystero'
 import type {Room} from 'trystero'
-import {baseNetConfig} from './room'
+import {netJoinRoom} from './room'
 
 const QUICK_ROOM = 'PIXELPONG-QUICKMATCH'
 
@@ -21,7 +21,7 @@ export interface QuickMatchHandle {
 }
 
 export function startQuickMatch(onMatched: (privateCode: string, opponentId: string) => void): QuickMatchHandle {
-  const room: Room = joinRoom(baseNetConfig(), QUICK_ROOM)
+  const room: Room = netJoinRoom({}, QUICK_ROOM)
 
   // normalize makeAction across Trystero API shapes (object {send,onMessage} vs [send,get])
   const made = (room as {makeAction: (n: string) => unknown}).makeAction('propose')

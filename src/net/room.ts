@@ -10,7 +10,8 @@
  * newer builds return an object `{send, onMessage}`, older ones a `[send, get]`
  * tuple — so a version bump only touches this file.
  */
-import {joinRoom, selfId} from 'trystero'
+import {joinRoom as joinNostrRoom, selfId} from 'trystero'
+import {joinRoom as joinWsRelayRoom} from '@trystero-p2p/ws-relay'
 import type {Room} from 'trystero'
 import type {GameState} from '@/game/types'
 
@@ -21,44 +22,72 @@ export type Snapshot = GameState
 export const APP_ID = 'pixel_pong_v1'
 
 /**
- * Fixed set of reliable, long-lived public Nostr relays — the SAME list for
- * every client. Trystero's default list has ~50 entries, many flaky or dead
- * (e.g. koru.bitcointxoko.org), and each client connects to a random subset —
- * so two peers could end up with NO working relay in common and never meet
- * (symptom in prod: "WebSocket connection to wss://… failed" + nobody joins).
- * Passing explicit urls makes every client use this exact list.
+ * SIGNALING — two interchangeable strategies, chosen by env:
+ *
+ *  1. OWN RELAY (preferred for production): set `VITE_RELAY_URLS` to the
+ *     wss:// URL(s) of our self-hosted @trystero-p2p/ws-relay server (see
+ *     relay-server/README.md — a $4 VPS runs it). 100% under our control,
+ *     no third-party policies/rate limits.
+ *
+ *  2. PUBLIC NOSTR (fallback / local dev, no env needed): a fixed list of
+ *     public Nostr relays, the SAME for every client. Fragile long-term:
+ *     public relays keep adding web-of-trust filters ("pubkey is not in our
+ *     web of trust" — offchain.pub) and rate limits ("noting too much" —
+ *     damus.io), which silently kill signaling. That's WHY own relay exists.
  */
-export const RELAY_URLS = [
-  'wss://relay.damus.io',
+const ENV_RELAYS = (import.meta.env.VITE_RELAY_URLS as string | undefined)
+  ?.split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+const USE_OWN_RELAY = !!ENV_RELAYS && ENV_RELAYS.length > 0
+
+/** Public Nostr fallback list (connectivity-tested; no WoT-filtering relays). */
+export const NOSTR_RELAY_URLS = [
   'wss://nos.lol',
   'wss://relay.primal.net',
   'wss://nostr.oxtr.dev',
   'wss://nostr.mom',
-  'wss://offchain.pub',
+  'wss://purplerelay.com',
+  'wss://relay.nostr.net',
 ]
 
 /**
- * Free public TURN (Open Relay / metered.ca) so peers behind strict NATs can
- * still connect over the internet (Vercel prod = different networks; direct
- * WebRTC often fails there while it works fine on one LAN). Data stays
- * end-to-end encrypted through TURN. If this service ever gets flaky, swap in
- * your own — Cloudflare Calls has a free TURN tier.
+ * TURN for peers behind strict NATs (prod = different networks; direct WebRTC
+ * often fails there while a LAN works). Own server via env
+ * (`VITE_TURN_URL/USER/PASS`, e.g. coturn on the same VPS) with a public
+ * free fallback. Data stays end-to-end encrypted through TURN either way.
  */
-export const TURN_CONFIG = [
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turns:openrelay.metered.ca:443?transport=tcp',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-]
+function turnConfig() {
+  const url = import.meta.env.VITE_TURN_URL as string | undefined
+  if (url) {
+    return [
+      {
+        urls: url.split(',').map((s) => s.trim()),
+        username: (import.meta.env.VITE_TURN_USER as string | undefined) ?? '',
+        credential: (import.meta.env.VITE_TURN_PASS as string | undefined) ?? '',
+      },
+    ]
+  }
+  return [
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turns:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ]
+}
 
-/** Shared Trystero config for BOTH the game room and quick-match. */
-export function baseNetConfig() {
-  return {appId: APP_ID, relayConfig: {urls: RELAY_URLS}, turnConfig: TURN_CONFIG}
+/** Join a Trystero room via the configured strategy (game room & quick-match). */
+export function netJoinRoom(extra: {password?: string}, roomId: string): Room {
+  const cfg = {appId: APP_ID, turnConfig: turnConfig(), ...extra}
+  if (USE_OWN_RELAY) {
+    return joinWsRelayRoom({...cfg, relayConfig: {urls: ENV_RELAYS!}}, roomId) as unknown as Room
+  }
+  return joinNostrRoom({...cfg, relayConfig: {urls: NOSTR_RELAY_URLS}}, roomId)
 }
 
 // ---- Wire message shapes (keep tiny; hot path runs many times/sec) ----
@@ -113,7 +142,7 @@ export interface PongRoom {
 export function createRoom(roomCode: string): PongRoom {
   const code = roomCode.trim().toUpperCase()
   // password = code → only matching codes ever connect, SDP stays private.
-  const room = joinRoom({...baseNetConfig(), password: code}, code)
+  const room = netJoinRoom({password: code}, code)
 
   return {
     room,
