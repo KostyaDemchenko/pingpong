@@ -90,6 +90,10 @@ export interface GameState {
   paused: boolean
   pauseVoteHost: boolean
   pauseVoteGuest: boolean
+  // --- "jpeg" cheat easter egg (per player): max-speed spun shots that always
+  // land on the receiver's half ---
+  cheatHost: boolean
+  cheatGuest: boolean
 }
 
 export const FIELD = {
@@ -171,5 +175,7 @@ export function initialState(): GameState {
     paused: false,
     pauseVoteHost: false,
     pauseVoteGuest: false,
+    cheatHost: false,
+    cheatGuest: false,
   }
 }

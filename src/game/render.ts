@@ -393,6 +393,38 @@ export function drawPaddle(
 /** Effect palette (canvas-only, not Pencil design tokens). */
 const FIRE_COLORS = ['#ffd75e', '#ff9f45', '#f76b6b'] as const
 
+/** A felt-bounce ripple: view-space position + age 0..1. */
+export interface Ripple {
+  nx: number
+  ny: number
+  age: number
+}
+
+/**
+ * Expanding rings on the felt where the ball bounced. Perspective-flattened
+ * ellipses with chunky quantized radii so they read as pixel-art waves.
+ */
+export function drawRipples(ctx: CanvasRenderingContext2D, W: number, H: number, ripples: Ripple[]): void {
+  for (const rp of ripples) {
+    const p = project(W, H, rp.nx, rp.ny)
+    const s = spriteScale(p.scale)
+    ctx.save()
+    ctx.strokeStyle = colors.white
+    ctx.lineWidth = Math.max(1, 2 * s)
+    for (let ring = 0; ring < 2; ring++) {
+      const a = rp.age - ring * 0.28
+      if (a < 0 || a > 1) continue
+      // quantize the radius to 3px steps — stepped pixel waves, not smooth circles
+      const r = Math.round(((6 + a * 30) * s) / 3) * 3
+      ctx.globalAlpha = 0.4 * (1 - a)
+      ctx.beginPath()
+      ctx.ellipse(p.sx, p.sy, r, r * 0.32, 0, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+}
+
 export function drawBall(
   ctx: CanvasRenderingContext2D,
   W: number,

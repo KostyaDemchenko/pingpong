@@ -119,6 +119,7 @@ export interface PaddleInput {
   x: number // normalized paddle x-position 0..1 (portrait table)
   y: number // normalized paddle depth 0..1, clamped to the sender's half
   t: number // sender clock (performance.now) for latest-wins
+  c?: 0 | 1 // "jpeg" cheat flag (easter egg)
 }
 
 type SendFn<T> = (data: T, target?: string | string[]) => void

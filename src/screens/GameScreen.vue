@@ -57,6 +57,26 @@ const REASON_LABEL: Record<string, string> = {
 // --- opponent disconnected mid-match ---
 const oppLeft = ref(false)
 
+// --- "jpeg" easter egg: type j-p-e-g to toggle max-spin guaranteed-landing shots ---
+const cheatOn = ref(false)
+let keyBuf = ''
+function onKeyDown(e: KeyboardEvent) {
+  const k = e.key.toLowerCase()
+  if (k.length !== 1 || k < 'a' || k > 'z') return
+  keyBuf = (keyBuf + k).slice(-4)
+  if (keyBuf !== 'jpeg') return
+  keyBuf = ''
+  cheatOn.value = !cheatOn.value
+  game?.setCheat(cheatOn.value)
+  if (mode === 'guest') {
+    const p = game?.getLocalPaddle()
+    if (p) net.room()?.paddle.send({x: p.x, y: p.y, t: performance.now(), c: cheatOn.value ? 1 : 0})
+  }
+  toast.value = {text: cheatOn.value ? 'JPEG MODE: ON' : 'JPEG MODE: OFF', mine: true, key: Date.now()}
+  window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => (toast.value = null), 1500)
+}
+
 // --- mutual-vote pause ---
 const myPauseVote = computed(() => (mySide.value === 0 ? ui.voteHost : ui.voteGuest))
 const oppPauseVote = computed(() => (mySide.value === 0 ? ui.voteGuest : ui.voteHost))
@@ -101,7 +121,7 @@ function onPointerMove(e: PointerEvent) {
     if (now - lastPaddleSend < 16) return
     lastPaddleSend = now
     const p = game.getLocalPaddle()
-    net.room()?.paddle.send({x: p.x, y: p.y, t: now})
+    net.room()?.paddle.send({x: p.x, y: p.y, t: now, c: cheatOn.value ? 1 : 0})
   }
 }
 
@@ -223,6 +243,8 @@ onMounted(() => {
     game.setCoinResult(coinResult.value)
   }
 
+  window.addEventListener('keydown', onKeyDown)
+
   game.start()
 
   // If the opponent disconnects mid-match: freeze the game and show an
@@ -241,6 +263,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeyDown)
   teardown()
   stopStatusWatch?.()
 })
@@ -266,6 +289,12 @@ onBeforeUnmount(() => {
             {{ ui.ping }}MS
           </span>
         </template>
+        <span
+          v-if="cheatOn"
+          class="font-display text-[9px] text-brand border border-brand px-1.5 py-0.5 animate-pulse shrink-0"
+        >
+          JPEG
+        </span>
       </span>
       <div class="flex items-center gap-2 font-display text-sm">
         <span class="hidden sm:inline font-body text-[10px] text-brand truncate max-w-[80px]">{{ flow.state.myName }}</span>

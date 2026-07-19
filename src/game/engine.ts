@@ -43,6 +43,9 @@ export interface Inputs {
   /** edge-triggered serve clicks; only the current server's flag is honored */
   serveHost?: boolean
   serveGuest?: boolean
+  /** "jpeg" cheat flags (easter egg) */
+  cheatHost?: boolean
+  cheatGuest?: boolean
 }
 
 /** Paddle velocities for this tick (units/sec, clamped), derived in step(). */
@@ -163,6 +166,9 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
     guestVx: clamp((state.guest.x - oldGuestX) / dtSec, -mv, mv),
     guestVy: clamp((state.guest.y - oldGuestY) / dtSec, -mv, mv),
   }
+
+  state.cheatHost = !!inputs.cheatHost
+  state.cheatGuest = !!inputs.cheatGuest
 
   if (state.phase === 'over' || state.phase === 'coin') return state
 
@@ -349,6 +355,31 @@ function tryPaddleHit(
 
   // snap back onto the plane and send it the other way
   b.y = paddle.y
+
+  // "jpeg" cheat: max-speed spun shot, aimed so the FIRST felt touch is
+  // guaranteed to land on the receiver's half (vz solved from ballistics).
+  if (hitter === 0 ? state.cheatHost : state.cheatGuest) {
+    const vary = (state.seq + state.rallyHits) % 4
+    const targetY = dir === 1 ? 0.6 + vary * 0.08 : 0.4 - vary * 0.08
+    const dist = Math.max(0.1, Math.abs(targetY - b.y))
+    const spinSign = (state.seq + state.rallyHits) % 2 === 0 ? 1 : -1
+    const cheatSpeed = FIELD.overdriveMaxSpeed
+    let t = dist / (cheatSpeed * 0.9)
+    // aim x back toward center, pre-compensating the Magnus drift
+    let cvx = (0.5 - b.x) / t - 0.5 * spinSign * FIELD.maxSpin * FIELD.spinCurve * t
+    cvx = clamp(cvx, -0.6 * cheatSpeed, 0.6 * cheatSpeed)
+    const cvy = dir * Math.sqrt(cheatSpeed * cheatSpeed - cvx * cvx)
+    t = dist / Math.abs(cvy)
+    b.vx = cvx
+    b.vy = cvy
+    b.vz = (FIELD.gravity * dist) / (2 * Math.abs(cvy)) // lands exactly at targetY
+    b.spin = spinSign * FIELD.maxSpin
+    state.lastHitter = hitter
+    state.bounceHost = 0
+    state.bounceGuest = 0
+    state.rallyHits++
+    return true
+  }
 
   // speed-up per hit + inertia bonus for swinging INTO the ball. A violent
   // swing (>= overdriveSwing) goes into OVERDRIVE: doubled boost past the

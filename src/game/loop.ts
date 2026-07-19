@@ -20,7 +20,7 @@
 import type {GameState, HotSnapshot} from './types'
 import {FIELD} from './types'
 import {newGame, step, startMatch as engineStartMatch, type Inputs} from './engine'
-import {drawBall, drawPaddle, drawTable, unproject} from './render'
+import {drawBall, drawPaddle, drawRipples, drawTable, unproject, type Ripple} from './render'
 
 export type GameMode = 'local' | 'host' | 'guest'
 
@@ -48,6 +48,8 @@ export interface GameHandle {
   setCoinResult(firstServer: 0 | 1): void
   /** (host/local) Coin flip done — lock the first server & start serving. */
   startMatch(firstServer: 0 | 1): void
+  /** Toggle the local player's "jpeg" cheat (easter egg). */
+  setCheat(on: boolean): void
   /** Serve click for the given side (host also relays the guest's clicks).
    * The engine ignores it unless that side is actually serving. */
   requestServe(side: 0 | 1): void
@@ -100,6 +102,10 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let serveGuestPending = false
   let aiServeTicks = 0
 
+  // "jpeg" cheat flags: mine + the remote guest's (host mode)
+  let cheatLocal = false
+  let remoteCheat = false
+
   // (guest) smoothed display positions: snapshots arrive at ~30Hz but we render
   // at 60fps. We keep the last TWO snapshots and render slightly in the past,
   // INTERPOLATING between them (smooth regardless of network jitter); only
@@ -124,6 +130,11 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let lastGuestInputT = 0
   // (guest) smoothed RTT estimate in ms
   let rttEma = 0
+
+  // felt-bounce ripples (visual only): model-space position + spawn time
+  const ripples: {nx: number; ny: number; t: number}[] = []
+  let prevBallZ = 0
+  let prevBallVz = 0
 
   // last score reported through onScore. Compared each tick against the state,
   // NOT against a pre-physics snapshot — the guest's score changes between
@@ -180,7 +191,16 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
 
     if (mode === 'host') {
       // host authoritative: own paddle is host, guest comes from the network
-      return {hostX: localX, hostY: localY, guestX: remoteGuestX, guestY: remoteGuestY, serveHost, serveGuest}
+      return {
+        hostX: localX,
+        hostY: localY,
+        guestX: remoteGuestX,
+        guestY: remoteGuestY,
+        serveHost,
+        serveGuest,
+        cheatHost: cheatLocal,
+        cheatGuest: remoteCheat,
+      }
     }
     // local: human = near/guest; AI = far/host (serves by itself after a beat)
     stepAi(dt)
@@ -193,7 +213,15 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     } else {
       aiServeTicks = 0
     }
-    return {hostX: aiX, hostY: aiY, guestX: localX, guestY: localY, serveHost: aiServe, serveGuest}
+    return {
+      hostX: aiX,
+      hostY: aiY,
+      guestX: localX,
+      guestY: localY,
+      serveHost: aiServe,
+      serveGuest,
+      cheatGuest: cheatLocal, // the AI plays fair
+    }
   }
 
   function tick(now: number): void {
@@ -223,6 +251,28 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       notifiedGuest = state.scoreGuest
       handle.onScore?.({host: state.scoreHost, guest: state.scoreGuest})
     }
+
+    // felt-bounce detection for the ripple effect: the ball's vertical motion
+    // flipped from falling to at-rest/rising right at the felt
+    const bz = mode === 'guest' ? disp.bz : state.ball.z
+    const bvz = state.ball.vz
+    if (
+      state.phase === 'rally' &&
+      prevBallZ > 0.004 &&
+      bz <= 0.012 &&
+      prevBallVz < -0.15 &&
+      bvz >= prevBallVz + 0.1
+    ) {
+      const last = ripples[ripples.length - 1]
+      const bx = mode === 'guest' ? disp.bx : state.ball.x
+      const by = mode === 'guest' ? disp.by : state.ball.y
+      if (!last || now - last.t > 120 || Math.hypot(bx - last.nx, by - last.ny) > 0.05) {
+        ripples.push({nx: bx, ny: by, t: now})
+        if (ripples.length > 6) ripples.shift()
+      }
+    }
+    prevBallZ = bz
+    prevBallVz = bvz
 
     render()
     raf = requestAnimationFrame(tick)
@@ -293,6 +343,14 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
 
   function render(): void {
     drawTable(ctx!, W, H)
+    // felt ripples sit on the table, under paddles & ball
+    const nowMs = performance.now()
+    const live: Ripple[] = []
+    for (const rp of ripples) {
+      const age = (nowMs - rp.t) / 550
+      if (age <= 1) live.push({nx: vx(rp.nx), ny: vy(rp.ny), age})
+    }
+    if (live.length) drawRipples(ctx!, W, H, live)
     // my paddle is always the near/green one in MY view; opponent far/red.
     const far = flip ? state.guest : state.host
     const near = flip ? state.host : state.guest
@@ -344,10 +402,14 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     getLocalPaddle(): {x: number; y: number} {
       return {x: localX, y: localY}
     },
-    setRemotePaddle(x: number, y: number, t = 0): void {
+    setRemotePaddle(x: number, y: number, t = 0, cheat = false): void {
       remoteGuestX = clamp01(x)
       remoteGuestY = Math.min(Math.max(y, FIELD.guestYMin), FIELD.guestYMax)
       if (t > 0) lastGuestInputT = t
+      remoteCheat = cheat
+    },
+    setCheat(on: boolean): void {
+      cheatLocal = on
     },
     getHotSnapshot(): HotSnapshot {
       const b = state.ball
