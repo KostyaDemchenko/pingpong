@@ -14,6 +14,7 @@
  * outlines. Colors come from src/theme/tokens.ts (ported from the .pen file).
  */
 import {colors} from '@/theme/tokens'
+import {FIELD} from '@/game/types'
 
 interface TableGeom {
   farY: number // top (far) edge y, fraction of H
@@ -381,14 +382,13 @@ export function drawPaddle(
   ctx.restore()
 }
 
-/** How much screen height one unit of ball height (z) lifts the ball, before depth scaling. */
-const HEIGHT_SCALE = 0.6
-
 /**
  * Draw the ball from the Pencil `Ball` component: white pixel sphere with a
- * hard offset shadow, highlights and a bottom-right shade, RAISED on screen by
- * its height `z`. Its ground shadow stays at z=0 — the gap sells the 2.5D arc.
- * A faint green trail is drawn behind the ball while it moves (design detail).
+ * hard offset shadow, highlights and a bottom-right shade. Height is shown by
+ * lifting the sprite toward the far side IN TABLE-DEPTH UNITS (z * aimLift) —
+ * the SAME formula the engine's hit test uses, so the sprite you aim at is
+ * exactly where the engine checks the paddle. The ground shadow stays at the
+ * true position — the gap between them sells the 2.5D arc.
  */
 export function drawBall(
   ctx: CanvasRenderingContext2D,
@@ -400,13 +400,14 @@ export function drawBall(
   vx = 0,
   vy = 0,
 ): void {
-  const p = project(W, H, nx, ny)
-  const s = spriteScale(p.scale)
   const zc = Math.min(0.5, Math.max(0, z))
-  // the ball reads closer to the camera as it rises — scale it up with height
-  const d = Math.max(6, H * 0.046 * s) * (1 + zc * 0.7)
+  const pGround = project(W, H, nx, ny) // true position (shadow)
+  const pBall = project(W, H, nx, ny - zc * FIELD.aimLift) // rendered sprite
+  const s = spriteScale(pBall.scale)
+  // slight growth with height keeps a rising ball readable (visual only —
+  // the hit test cares about position, not sprite size)
+  const d = Math.max(6, H * 0.046 * s) * (1 + zc * 0.35)
   const u = d / 24 // component grid unit
-  const lift = Math.max(0, z) * H * HEIGHT_SCALE * s
 
   // ground shadow at z = 0: shrinks AND fades as the ball rises (height cue #1)
   const shrink = 1 - Math.min(0.55, zc * 1.1)
@@ -414,21 +415,26 @@ export function drawBall(
   ctx.globalAlpha = 0.35 * (1 - Math.min(0.6, zc * 1.3))
   ctx.fillStyle = colors.pixelBlack
   ctx.beginPath()
-  ctx.ellipse(p.sx, p.sy, d * 0.5 * shrink, d * 0.15 * shrink, 0, 0, Math.PI * 2)
+  ctx.ellipse(pGround.sx, pGround.sy, d * 0.5 * shrink, d * 0.15 * shrink, 0, 0, Math.PI * 2)
   ctx.fill()
   ctx.restore()
 
-  const bx = p.sx - 12 * u
-  const by = p.sy - lift - 12 * u
+  const bx = pBall.sx - 12 * u
+  const by = pBall.sy - 12 * u
 
-  // dotted height line between the shadow and the ball (height cue #2)
-  if (lift > d * 0.8) {
+  // dotted height line between the shadow and the sprite (height cue #2)
+  const liftPx = Math.hypot(pGround.sx - pBall.sx, pGround.sy - pBall.sy)
+  if (liftPx > d * 0.8) {
     ctx.save()
     ctx.globalAlpha = 0.18
     ctx.fillStyle = colors.white
     const dot = Math.max(1, Math.round(u))
-    for (let yy = p.sy - d * 0.5; yy > p.sy - lift + d * 0.55; yy -= dot * 4) {
-      ctx.fillRect(Math.round(p.sx - dot / 2), Math.round(yy), dot, dot)
+    const steps = Math.floor(liftPx / (dot * 4))
+    for (let i = 1; i <= steps; i++) {
+      const f = i / (steps + 1)
+      const lx = pGround.sx + (pBall.sx - pGround.sx) * f
+      const ly = pGround.sy + (pBall.sy - pGround.sy) * f
+      ctx.fillRect(Math.round(lx - dot / 2), Math.round(ly), dot, dot)
     }
     ctx.restore()
   }
@@ -436,8 +442,8 @@ export function drawBall(
   // green motion trail behind the ball (opposite its velocity)
   const speed = Math.hypot(vx, vy)
   if (speed > 0.05) {
-    const tx = p.sx - (vx / speed) * d * 0.75
-    const ty = p.sy - lift - (vy / speed) * d * 0.75
+    const tx = pBall.sx - (vx / speed) * d * 0.75
+    const ty = pBall.sy - (vy / speed) * d * 0.75
     ctx.save()
     ctx.globalAlpha = 0.3
     ctx.fillStyle = colors.brand

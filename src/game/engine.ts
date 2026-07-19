@@ -212,10 +212,19 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
   // swept contact: paddle INPUT jumps once per tick while the ball moves in
   // sub-steps — a fast swing (power/spin hits!) can carry the paddle clean
   // over the proximity window between two ticks. If the paddle plane crossed
-  // the ball's position this tick, that's a hit too.
-  if (b.vy < 0 && oldHostY < b.y && state.host.y >= b.y) {
+  // the ball's TRUE or VISUAL position this tick, that's a hit too.
+  const hostVisY = b.y + b.z * FIELD.aimLift
+  const guestVisY = b.y - b.z * FIELD.aimLift
+  if (
+    b.vy < 0 &&
+    ((oldHostY < b.y && state.host.y >= b.y) || (oldHostY < hostVisY && state.host.y >= hostVisY))
+  ) {
     tryPaddleHit(state, 0, halfW, 1, pv.hostVx, pv.hostVy)
-  } else if (b.vy > 0 && oldGuestY > b.y && state.guest.y <= b.y) {
+  } else if (
+    b.vy > 0 &&
+    ((oldGuestY > b.y && state.guest.y <= b.y) ||
+      (oldGuestY > guestVisY && state.guest.y <= guestVisY))
+  ) {
     tryPaddleHit(state, 1, halfW, -1, pv.guestVx, pv.guestVy)
   }
 
@@ -337,7 +346,6 @@ function tryPaddleHit(
   const b = state.ball
   const dx = b.x - paddle.x
   if (Math.abs(dx) > halfW + b.radius) return false // paddle didn't cover the ball's x
-  if (b.z > FIELD.maxHitHeight) return false // ball sailed over the paddle
 
   // snap back onto the plane and send it the other way
   b.y = paddle.y

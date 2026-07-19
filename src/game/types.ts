@@ -122,11 +122,14 @@ export const FIELD = {
   restitution: 0.86, // energy kept on a felt bounce (low values read as "the ball dies")
   serveVz: 1.0, // upward launch velocity when the ball is served
   returnVz: 1.05, // upward velocity added to a paddle return so it arcs back
-  maxHitHeight: 0.35, // ball must be at/below this height to be returnable
-  // --- proximity hit model (no more plane-crossing-only registration) ---
-  hitDepth: 0.045, // how close in table depth the paddle must be to connect
-  aimLift: 0.6, // players aim at the RENDERED ball (lifted by z) — also match
-  // the paddle against the ball's visual position, shifted by z * aimLift
+  // --- proximity hit model: "what you see is what you hit" ---
+  // The renderer lifts the ball sprite by z * aimLift IN TABLE-DEPTH UNITS
+  // (render.ts uses the same constant), so the sprite's position on the felt
+  // and the engine's hit test agree EXACTLY. A hit connects when the paddle
+  // covers the ball's visual position OR its true/shadow position — no height
+  // gate: a high ball's sprite sits further up-court, which IS its difficulty.
+  hitDepth: 0.055, // how close in table depth the paddle must be to connect
+  aimLift: 0.6, // sprite lift per unit of ball height, in depth units
   // --- manual serve ---
   serveBallLead: 0.05, // how far in front of the server's paddle the ball waits
   aiServeDelayTicks: 50, // practice AI serves ~0.8s after the serve phase begins
