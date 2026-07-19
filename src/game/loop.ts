@@ -109,6 +109,12 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   // (guest) smoothed RTT estimate in ms
   let rttEma = 0
 
+  // last score reported through onScore. Compared each tick against the state,
+  // NOT against a pre-physics snapshot — the guest's score changes between
+  // ticks via network snapshots, which a before/after diff can never see.
+  let notifiedHost = 0
+  let notifiedGuest = 0
+
   const dpr = () => Math.max(1, Math.min(window.devicePixelRatio || 1, 3))
 
   function resize(): void {
@@ -182,9 +188,6 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     if (frameDt > MAX_ACCUM) frameDt = MAX_ACCUM
     accum += frameDt
 
-    const prevHost = state.scoreHost
-    const prevGuest = state.scoreGuest
-
     // guest mode does NOT run physics; it renders the last applied snapshot and
     // only tracks its own paddle locally.
     if (mode !== 'guest') {
@@ -199,7 +202,9 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       smoothGuestView(now, frameDt)
     }
 
-    if (state.scoreHost !== prevHost || state.scoreGuest !== prevGuest) {
+    if (state.scoreHost !== notifiedHost || state.scoreGuest !== notifiedGuest) {
+      notifiedHost = state.scoreHost
+      notifiedGuest = state.scoreGuest
       handle.onScore?.({host: state.scoreHost, guest: state.scoreGuest})
     }
 
