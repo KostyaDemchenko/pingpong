@@ -35,8 +35,9 @@ export interface GameHandle {
   /** The local player's paddle in MODEL coords (for sending over the net). */
   getLocalPaddle(): {x: number; y: number}
   /** (host mode) Set the remote guest's paddle center in model coords.
-   * `t` is the guest's send timestamp — echoed back for RTT measurement. */
-  setRemotePaddle(x: number, y: number, t?: number): void
+   * `t` is the guest's send timestamp — echoed back for RTT measurement.
+   * `cheat` mirrors the guest's "jpeg" easter-egg flag riding the input. */
+  setRemotePaddle(x: number, y: number, t?: number, cheat?: boolean): void
   /** (host mode) Compact 30Hz snapshot for the wire (~300B vs multi-KB state). */
   getHotSnapshot(): HotSnapshot
   /** (guest mode) Apply a compact snapshot (hot path). */
@@ -135,6 +136,13 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   const ripples: {nx: number; ny: number; t: number}[] = []
   let prevBallZ = 0
   let prevBallVz = 0
+  // felt-touch squash timestamp (ball flattens for ~100ms on a bounce)
+  let squashT = -1e9
+  // volley-gate arming pulses: when a paddle flips dead -> live mid-rally
+  let prevHostLive = true
+  let prevGuestLive = true
+  let hostFlashT = -1e9
+  let guestFlashT = -1e9
 
   // last score reported through onScore. Compared each tick against the state,
   // NOT against a pre-physics snapshot — the guest's score changes between
@@ -269,6 +277,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       if (!last || now - last.t > 120 || Math.hypot(bx - last.nx, by - last.ny) > 0.05) {
         ripples.push({nx: bx, ny: by, t: now})
         if (ripples.length > 6) ripples.shift()
+        squashT = now
       }
     }
     prevBallZ = bz
@@ -341,16 +350,32 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     disp.hy += (thy - disp.hy) * a
   }
 
+  /**
+   * The volley-gate as the renderer tells it: a paddle is LIVE (may return the
+   * ball) once the ball has bounced on its half and its owner didn't hit last;
+   * during serve/point phases only the server "holds" a live paddle.
+   */
+  function paddleLive(side: 0 | 1): boolean {
+    if (state.phase === 'rally') {
+      const bounced = side === 0 ? state.bounceHost >= 1 : state.bounceGuest >= 1
+      return bounced && state.lastHitter !== side
+    }
+    if (state.phase === 'serve' || state.phase === 'point') return state.serving === side
+    return true
+  }
+
   function render(): void {
     drawTable(ctx!, W, H)
-    // felt ripples sit on the table, under paddles & ball
+    // felt ripples sit on the table, under paddles & ball. Green = the bounce
+    // landed on the LOCAL player's half (their paddle arms on it).
     const nowMs = performance.now()
-    const live: Ripple[] = []
+    const liveRipples: Ripple[] = []
     for (const rp of ripples) {
       const age = (nowMs - rp.t) / 550
-      if (age <= 1) live.push({nx: vx(rp.nx), ny: vy(rp.ny), age})
+      const own = flip ? rp.ny < 0.5 : rp.ny > 0.5
+      if (age <= 1) liveRipples.push({nx: vx(rp.nx), ny: vy(rp.ny), age, own})
     }
-    if (live.length) drawRipples(ctx!, W, H, live)
+    if (liveRipples.length) drawRipples(ctx!, W, H, liveRipples)
     // my paddle is always the near/green one in MY view; opponent far/red.
     const far = flip ? state.guest : state.host
     const near = flip ? state.host : state.guest
@@ -360,19 +385,45 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     const bX = mode === 'guest' ? disp.bx : state.ball.x
     const bY = mode === 'guest' ? disp.by : state.ball.y
     const bZ = mode === 'guest' ? disp.bz : state.ball.z
-    drawPaddle(ctx!, W, H, vx(farX), vy(farY), false)
-    drawBall(
-      ctx!,
-      W,
-      H,
-      vx(bX),
-      vy(bY),
-      bZ,
-      flip ? -state.ball.vx : state.ball.vx,
-      flip ? -state.ball.vy : state.ball.vy,
-      flip ? -state.ball.spin : state.ball.spin,
-    )
-    drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true)
+    // volley-gate visuals: dead paddles render dimmed; a fresh arming pulses
+    const hostLive = paddleLive(0)
+    const guestLive = paddleLive(1)
+    if (hostLive && !prevHostLive && state.phase === 'rally') hostFlashT = nowMs
+    if (guestLive && !prevGuestLive && state.phase === 'rally') guestFlashT = nowMs
+    prevHostLive = hostLive
+    prevGuestLive = guestLive
+    const flash = (t: number) => Math.max(0, 1 - (nowMs - t) / 220)
+    const farLive = flip ? guestLive : hostLive
+    const nearLive = flip ? hostLive : guestLive
+    const farFlash = flash(flip ? guestFlashT : hostFlashT)
+    const nearFlash = flash(flip ? hostFlashT : guestFlashT)
+    const squash = Math.max(0, 1 - (nowMs - squashT) / 100)
+    drawPaddle(ctx!, W, H, vx(farX), vy(farY), false, farLive, farFlash)
+    const ball = () =>
+      drawBall(
+        ctx!,
+        W,
+        H,
+        vx(bX),
+        vy(bY),
+        bZ,
+        flip ? -state.ball.vx : state.ball.vx,
+        flip ? -state.ball.vy : state.ball.vy,
+        flip ? -state.ball.spin : state.ball.spin,
+        squash,
+        nowMs,
+      )
+    // while the NEAR player holds the serve, the waiting ball must render on
+    // top of their (large) blade — otherwise it hides behind the sprite
+    const nearServes =
+      (state.phase === 'serve' || state.phase === 'point') && state.serving === (flip ? 0 : 1)
+    if (nearServes) {
+      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash)
+      ball()
+    } else {
+      ball()
+      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash)
+    }
   }
 
   const handle: GameHandle = {
@@ -423,6 +474,9 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
         b: {x: b.x, y: b.y, vx: b.vx, vy: b.vy, z: b.z, vz: b.vz, spin: b.spin},
         hx: state.host.x,
         hy: state.host.y,
+        bh: state.bounceHost,
+        bg: state.bounceGuest,
+        lh: state.lastHitter,
         et: lastGuestInputT,
       }
     },
@@ -461,6 +515,9 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       state.ball = {...state.ball, ...h.b}
       state.host.x = h.hx
       state.host.y = h.hy
+      state.bounceHost = h.bh
+      state.bounceGuest = h.bg
+      state.lastHitter = h.lh
       if (h.et > 0) {
         const rtt = performance.now() - h.et
         if (rtt >= 0 && rtt < 5000) rttEma = rttEma ? rttEma * 0.8 + rtt * 0.2 : rtt

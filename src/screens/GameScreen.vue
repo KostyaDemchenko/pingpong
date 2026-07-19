@@ -52,6 +52,9 @@ const REASON_LABEL: Record<string, string> = {
   double_bounce: '2x BOUNCE',
   hit_out: 'OUT',
   missed: 'MISS',
+  net: 'NET',
+  serve_fault: 'FAULT',
+  short: 'SHORT',
 }
 
 // --- opponent disconnected mid-match ---
@@ -190,7 +193,7 @@ onMounted(() => {
 
   const room = net.room()
   if (mode === 'host' && room) {
-    room.paddle.onMessage((inp) => game?.setRemotePaddle(inp.x, inp.y, inp.t))
+    room.paddle.onMessage((inp) => game?.setRemotePaddle(inp.x, inp.y, inp.t, inp.c === 1))
     room.serve.onMessage(() => game?.requestServe(1)) // guest's serve click
     room.pauseVote.onMessage((v) => game?.setPauseVote(1, v)) // guest's pause vote
     // hot path: tiny snapshot at 30Hz; the FULL state (events/stats) only ~1/sec

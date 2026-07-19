@@ -28,6 +28,9 @@ export type PointReason =
   | 'double_bounce' // ball bounced twice on the loser's half
   | 'hit_out' // loser knocked the ball out without touching the receiver's half
   | 'missed' // ball bounced on the loser's half and they failed to return it
+  | 'net' // loser's shot hit the net and never reached the receiver's half
+  | 'serve_fault' // serve's first felt touch was not on the server's own half
+  | 'short' // loser's return landed on their own half (never crossed)
 
 export interface GameEvent {
   kind: 'serve' | 'point'
@@ -54,6 +57,13 @@ export interface HotSnapshot {
   b: {x: number; y: number; vx: number; vy: number; z: number; vz: number; spin: number}
   hx: number // host paddle
   hy: number
+  /** volley-gate mirror: bounce counts since the last hit + who hit last —
+   * the guest needs these to render the "armed/disarmed" paddle state at
+   * snapshot rate (a paddle is live iff its half was touched AND the owner
+   * didn't hit last) */
+  bh: number
+  bg: number
+  lh: 0 | 1
   /** echo of the guest's latest input timestamp — lets the guest measure RTT */
   et: number
 }
@@ -72,6 +82,8 @@ export interface GameState {
   lastHitter: 0 | 1 // who last hit the ball (server counts as first hitter)
   bounceHost: number // felt bounces on the host half since the last hit
   bounceGuest: number // felt bounces on the guest half since the last hit
+  /** the ball clipped the net since the last hit (drives the 'net' reason) */
+  netTouch: boolean
   /** who serves the FIRST point (coin flip); -1 until decided */
   firstServer: -1 | 0 | 1
   /** ticks left in the between-points pause ('point' phase) */
@@ -97,8 +109,12 @@ export interface GameState {
 }
 
 export const FIELD = {
-  paddleWidth: 0.15, // physics width ~matches the visual blade (was 0.22 = ghost hits)
-  ballRadius: 0.02,
+  // Physics sizes ARE the visual sizes: render.ts draws the blade & ball at
+  // exactly these model widths via the projection, so "looks like a hit" and
+  // "is a hit" agree on every screen. Proportions match the Pencil frames
+  // (blade ~17% / ball ~5% of the table width).
+  paddleWidth: 0.17,
+  ballRadius: 0.026,
   ballSpeed: 0.9, // units/sec
   speedUpPerHit: 1.02, // gentle ramp within a rally (resets every point)
   physicsHz: 60,
@@ -124,8 +140,26 @@ export const FIELD = {
   // --- 2.5D height / bounce tuning (z is in the same normalized units as y) ---
   gravity: 4.0, // downward accel on z (units/sec^2) — pulls the ball back to the felt
   restitution: 0.86, // energy kept on a felt bounce (low values read as "the ball dies")
-  serveVz: 1.0, // upward launch velocity when the ball is served
   returnVz: 1.05, // upward velocity added to a paddle return so it arcs back
+  // --- the net is PHYSICAL: a ball crossing the midline below netHeight
+  // plops off the mesh and drops on the hitter's side ---
+  netHeight: 0.055, // real TT proportion: 15.25cm net vs 274cm table
+  netBounce: 0.12, // how much forward speed survives the net plop (reversed)
+  rollFriction: 3, // per-sec decay for a ball rolling flat on the felt
+  deadBallSpeed: 0.06, // a rally ball slower than this at z=0 is dead -> score it
+  // --- REAL serve: struck from serveHeight behind the serve line; vz is
+  // SOLVED ballistically so the first bounce lands on the server's own half,
+  // clears the net after the bounce, and drops on the receiver's half.
+  // Wrong-half touches are still faults (spin/side-outs stay honest). ---
+  serveHeight: 0.1, // the ball hovers at paddle height while waiting to serve
+  serveOwnBounceFrac: 0.42, // own-half bounce target: this far from the net (of launch depth)
+  serveSpeedBase: 0.72, // serve forward speed before the flick bonus
+  serveSpeedMax: 0.85, // hard cap keeps every honest serve inside the legal window
+  serveVzClamp: 1.5, // sanity clamp for the solved launch vz
+  // the serve is struck from BEHIND the serve line (real TT: behind the end
+  // line) — the waiting ball is glued no closer to the net than this depth
+  hostServeYMax: 0.18,
+  guestServeYMin: 0.82,
   // --- proximity hit model: "what you see is what you hit" ---
   // The renderer lifts the ball sprite by z * aimLift IN TABLE-DEPTH UNITS
   // (render.ts uses the same constant), so the sprite's position on the felt
@@ -167,6 +201,7 @@ export function initialState(): GameState {
     lastHitter: 0,
     bounceHost: 0,
     bounceGuest: 0,
+    netTouch: false,
     firstServer: -1,
     pointTimer: 0,
     events: [],

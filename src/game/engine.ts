@@ -12,10 +12,15 @@
  * that's what prevents a fast ball from tunneling through a paddle plane or
  * skipping the felt bounce.
  *
- * Table-tennis rules implemented (simplified):
+ * Table-tennis rules implemented:
  *  - Coin flip decides the first server (phase 'coin' until startMatch()).
  *  - MANUAL serve: during 'serve' the ball waits in front of the server's
  *    paddle; the server launches it via Inputs.serveHost/serveGuest (a click).
+ *  - REAL serve trajectory: struck from serveHeight, it must bounce on the
+ *    server's OWN half first — a first felt touch anywhere else is a fault
+ *    (point to the receiver). Speed is capped so honest serves stay legal.
+ *  - The net is PHYSICAL: a ball crossing the midline below netHeight plops
+ *    back onto the hitter's side; when it dies there, the hitter loses ('net').
  *  - Server alternates every 2 points; every 1 point from 10:10 (deuce).
  *  - Win at 11+ with a 2-point lead.
  *  - NO volleys: a paddle can only return the ball after it has bounced on
@@ -65,15 +70,24 @@ function pushEvent(state: GameState, ev: GameEvent): void {
   if (state.events.length > 40) state.events.shift()
 }
 
-/** Where the served ball waits: just in front of the server's paddle. */
+/**
+ * Where the served ball waits: just in front of the server's paddle, but never
+ * closer to the net than the serve line — a legal own-half-first serve is
+ * ballistically impossible from up close, so the ball stays behind the line
+ * even when the paddle wanders forward (like serving from behind the end line).
+ */
 function glueBallToServer(state: GameState): void {
   const server: Paddle = state.serving === 0 ? state.host : state.guest
   const lead = state.serving === 0 ? FIELD.serveBallLead : -FIELD.serveBallLead
+  const anchorY =
+    state.serving === 0
+      ? Math.min(server.y, FIELD.hostServeYMax)
+      : Math.max(server.y, FIELD.guestServeYMin)
   state.ball.x = server.x
-  state.ball.y = server.y + lead
+  state.ball.y = anchorY + lead
   state.ball.vx = 0
   state.ball.vy = 0
-  state.ball.z = 0
+  state.ball.z = FIELD.serveHeight // held at paddle height, ready to strike
   state.ball.vz = 0
   state.ball.spin = 0
 }
@@ -197,14 +211,26 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
     const flicked = dir * pvy >= FIELD.serveSwingVel
     if (!clicked && !flicked) return state
     const drift = ((state.seq % 7) / 7 - 0.5) * 0.25 * FIELD.ballSpeed
-    const speed = Math.min(FIELD.ballSpeed + Math.max(0, dir * pvy) * FIELD.inertiaPower, FIELD.maxSpeed)
+    // capped forward speed: the serve must bounce on the OWN half first, so
+    // extra flick violence buys spin/placement instead of an instant fault
+    const speed = Math.min(
+      FIELD.serveSpeedBase + Math.max(0, dir * pvy) * FIELD.inertiaPower,
+      FIELD.serveSpeedMax,
+    )
+    // solve the launch vz so the FIRST bounce lands on the own half at the
+    // target depth (real-TT serve arc): 0 = z0 + vz*t1 - g/2*t1^2
+    const launchY = state.ball.y
+    const ownDist = Math.abs(launchY - 0.5) * (1 - FIELD.serveOwnBounceFrac)
+    const t1 = Math.max(0.05, ownDist / speed)
+    const vz = (FIELD.gravity / 2) * t1 - FIELD.serveHeight / t1
     state.ball.vx = drift
     state.ball.vy = dir * speed
-    state.ball.vz = FIELD.serveVz
+    state.ball.vz = clamp(vz, -FIELD.serveVzClamp, FIELD.serveVzClamp)
     state.ball.spin = clamp(pvx * FIELD.spinFactor, -FIELD.maxSpin, FIELD.maxSpin)
     state.lastHitter = state.serving
     state.bounceHost = 0
     state.bounceGuest = 0
+    state.netTouch = false
     state.rallyHits = 0
     state.stats.rallies++
     state.phase = 'rally'
@@ -256,8 +282,20 @@ function subStep(state: GameState, dt: number, halfW: number, pv: PaddleVel): bo
   b.vx += b.spin * FIELD.spinCurve * dt
   b.spin *= Math.max(0, 1 - FIELD.spinDecay * dt)
 
+  const yPrev = b.y
   b.x += b.vx * dt
   b.y += b.vy * dt
+
+  // PHYSICAL net: crossing the midline below the tape means the ball smacks
+  // into the mesh — it plops back onto the hitter's side and (usually) dies
+  // there, which the dead-ball rule below scores as a 'net' fault.
+  if ((yPrev - 0.5) * (b.y - 0.5) < 0 && b.z < FIELD.netHeight) {
+    b.y = yPrev < 0.5 ? 0.5 - 0.002 : 0.5 + 0.002
+    b.vy = -b.vy * FIELD.netBounce
+    b.vx *= 0.4
+    b.spin *= 0.2
+    state.netTouch = true
+  }
 
   // vertical (height) integration: gravity pulls the ball back to the felt,
   // where it bounces — this is what makes the ball arc & bounce like 2.5D pong.
@@ -267,22 +305,61 @@ function subStep(state: GameState, dt: number, halfW: number, pv: PaddleVel): bo
     b.z = 0
     if (b.vz < 0) {
       b.vz = -b.vz * FIELD.restitution
-      // felt touch: book it on the half it landed on; a SECOND bounce on the
-      // same half since the last hit means that side failed to return.
-      if (b.y < 0.5) {
-        if (++state.bounceHost >= 2) {
-          scorePoint(state, 1, 'double_bounce')
+      // --- felt touch: apply the real-TT touch rules ---
+      const halfOwner: 0 | 1 = b.y < 0.5 ? 0 : 1
+      const isServeFlight = state.rallyHits === 0 // ball is still the serve
+      if (halfOwner === state.lastHitter) {
+        // touched the HITTER's own half. For a RETURN that's an instant loss
+        // (the shot never reached the receiver — usually a net plop or a lob
+        // that fell short). For the SERVE the first own-half touch is REQUIRED;
+        // a second one means the serve died there — fault.
+        if (!isServeFlight) {
+          scorePoint(state, other(state.lastHitter), state.netTouch ? 'net' : 'short')
+          return true
+        }
+        const own = state.lastHitter === 0 ? ++state.bounceHost : ++state.bounceGuest
+        if (own >= 2) {
+          scorePoint(state, other(state.lastHitter), 'serve_fault')
           return true
         }
       } else {
-        if (++state.bounceGuest >= 2) {
-          scorePoint(state, 0, 'double_bounce')
+        // touched the RECEIVER's half. A serve landing here before bouncing on
+        // the server's own half is a fault; a SECOND touch here means the
+        // receiver failed to return — point to the hitter.
+        if (isServeFlight && state.bounceHost + state.bounceGuest === 0) {
+          scorePoint(state, other(state.lastHitter), 'serve_fault')
+          return true
+        }
+        const rec = halfOwner === 0 ? ++state.bounceHost : ++state.bounceGuest
+        if (rec >= 2) {
+          scorePoint(state, other(halfOwner), 'double_bounce')
           return true
         }
       }
     }
     // let tiny residual bounces settle so the ball rolls flat instead of jittering
     if (Math.abs(b.vz) < 0.02) b.vz = 0
+    // rolling friction: a flat ball bleeds speed fast enough to die visibly
+    // instead of crawling across the table forever
+    if (b.vz === 0) {
+      const f = Math.max(0, 1 - FIELD.rollFriction * dt)
+      b.vx *= f
+      b.vy *= f
+      b.spin *= f
+    }
+  }
+
+  // dead ball: it stopped on the felt mid-rally — same verdict as going out
+  // (bounced on the receiver's half = they missed it; otherwise — including a
+  // net plop back onto the hitter's side — the hitter loses the point).
+  if (b.z === 0 && b.vz === 0 && Math.hypot(b.vx, b.vy) < FIELD.deadBallSpeed) {
+    const v = outVerdict(state)
+    let reason = v.reason
+    if (v.winner !== state.lastHitter) {
+      reason = state.netTouch ? 'net' : state.rallyHits === 0 ? 'serve_fault' : 'short'
+    }
+    scorePoint(state, v.winner, reason)
+    return true
   }
 
   // SIDE out-of-bounds: no invisible walls — the ball flies off the table
@@ -345,6 +422,8 @@ function tryPaddleHit(
   pvx: number,
   pvy: number,
 ): boolean {
+  // no double hits: whoever hit last (incl. the server) can't touch it again
+  if (hitter === state.lastHitter) return false
   // volley gate: your paddle is "live" only after the ball touched your half
   if ((hitter === 0 ? state.bounceHost : state.bounceGuest) < 1) return false
 
@@ -377,6 +456,7 @@ function tryPaddleHit(
     state.lastHitter = hitter
     state.bounceHost = 0
     state.bounceGuest = 0
+    state.netTouch = false
     state.rallyHits++
     return true
   }
@@ -405,6 +485,7 @@ function tryPaddleHit(
   state.lastHitter = hitter
   state.bounceHost = 0
   state.bounceGuest = 0
+  state.netTouch = false
   state.rallyHits++
   return true
 }
