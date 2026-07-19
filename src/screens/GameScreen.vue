@@ -96,9 +96,9 @@ function onPointerMove(e: PointerEvent) {
   const r = canvas.value.getBoundingClientRect()
   game.setPointer(e.clientX - r.left, e.clientY - r.top)
   if (mode === 'guest') {
-    // throttle to ~40/s — pointermove can fire 120+/s and flood a TURN relay
+    // throttle to ~60/s — pointermove can fire 120+/s and flood a TURN relay
     const now = performance.now()
-    if (now - lastPaddleSend < 25) return
+    if (now - lastPaddleSend < 16) return
     lastPaddleSend = now
     const p = game.getLocalPaddle()
     net.room()?.paddle.send({x: p.x, y: p.y, t: now})
@@ -393,12 +393,13 @@ onBeforeUnmount(() => {
       @done="onCoinDone"
     />
 
-    <footer class="px-4 py-3 text-center">
-      <span v-if="ui.phase === 'serve' && myServe" class="font-body text-brand text-[11px]">
-        CLICK / TAP TO SERVE · SWIPE SIDEWAYS FOR SPIN
+    <!-- fixed height: swapping hint text must NOT resize the canvas above -->
+    <footer class="h-10 shrink-0 px-4 flex items-center justify-center text-center overflow-hidden">
+      <span v-if="ui.phase === 'serve' && myServe" class="font-body text-brand text-[11px] truncate">
+        FLICK FORWARD OR TAP TO SERVE<span class="hidden sm:inline"> · SWIPE SIDEWAYS FOR SPIN</span>
       </span>
-      <span v-else class="font-body text-text-muted text-[11px]">
-        MOVE PADDLE WITH CURSOR / FINGER · FIRST TO 11 · WIN BY 2
+      <span v-else class="font-body text-text-muted text-[11px] truncate">
+        MOVE PADDLE WITH CURSOR / FINGER<span class="hidden sm:inline"> · FIRST TO 11 · WIN BY 2</span>
       </span>
     </footer>
   </div>

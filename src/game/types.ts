@@ -98,7 +98,7 @@ export const FIELD = {
   ballSpeed: 0.9, // units/sec
   speedUpPerHit: 1.02, // gentle ramp within a rally (resets every point)
   physicsHz: 60,
-  netBroadcastHz: 30,
+  netBroadcastHz: 40, // tiny ~190B snapshots — higher rate = lower guest delay
   pointsToWin: 11, // reach 11 with a 2-point lead (deuce rules)
   servesPerTurn: 2, // server alternates every 2 points (every 1 at deuce)
   pointPauseTicks: 72, // ~1.2s breather between points before the next serve
@@ -130,6 +130,7 @@ export const FIELD = {
   // --- manual serve ---
   serveBallLead: 0.05, // how far in front of the server's paddle the ball waits
   aiServeDelayTicks: 50, // practice AI serves ~0.8s after the serve phase begins
+  serveSwingVel: 1.1, // flicking the paddle forward this fast serves too (touch UX)
   // --- spin & inertia (paddle velocity -> shot character) ---
   maxPaddleVel: 4, // clamp per-axis paddle velocity (units/sec) before use
   spinFactor: 0.55, // lateral paddle velocity -> ball spin

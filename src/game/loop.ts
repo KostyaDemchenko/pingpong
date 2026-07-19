@@ -118,7 +118,8 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let lastSnapAt = 0
   let sPrev: Sample | null = null
   let sLast: Sample | null = null
-  let snapGapEma = 33 // measured ms between snapshots
+  let snapGapEma = 25 // measured ms between snapshots
+  let snapJitterEma = 5 // measured |gap - average| — network jitter
   const disp = {bx: 0.5, by: 0.5, bz: 0, hx: 0.5, hy: FIELD.hostPaddleY as number}
   // (host) latest guest input timestamp, echoed in hot snapshots for RTT
   let lastGuestInputT = 0
@@ -239,9 +240,10 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
    */
   function smoothGuestView(now: number, frameDt: number): void {
     if (!sLast) return
-    // render ~1.5 snapshot-intervals in the past: as long as snapshots keep
-    // arriving we interpolate between two REAL states — no guessing, no jitter
-    const delay = Math.min(120, Math.max(45, snapGapEma * 1.5))
+    // adaptive render delay: one snapshot interval + 2x measured jitter — a
+    // clean connection renders ~35ms behind, a jittery one backs off just
+    // enough that the interpolation buffer (two REAL states) never runs dry
+    const delay = Math.min(150, Math.max(35, snapGapEma + snapJitterEma * 2 + 8))
     const rt = now - delay
     let tx: number
     let ty: number
@@ -353,7 +355,11 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     applyHotSnapshot(h: HotSnapshot): void {
       if (h.seq < state.seq) return
       const nowMs = performance.now()
-      if (lastSnapAt) snapGapEma = snapGapEma * 0.8 + Math.min(200, nowMs - lastSnapAt) * 0.2
+      if (lastSnapAt) {
+        const gap = Math.min(200, nowMs - lastSnapAt)
+        snapGapEma = snapGapEma * 0.8 + gap * 0.2
+        snapJitterEma = snapJitterEma * 0.8 + Math.abs(gap - snapGapEma) * 0.2
+      }
       lastSnapAt = nowMs
       sPrev = sLast
       sLast = {

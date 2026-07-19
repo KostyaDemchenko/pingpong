@@ -179,15 +179,17 @@ export function step(state: GameState, dtSec: number, inputs: Inputs): GameState
     return state
   }
 
-  // manual serve: ball follows the server's paddle until their serve click
+  // manual serve: ball follows the server's paddle until they either CLICK or
+  // FLICK the paddle forward fast enough (the natural touch gesture — the
+  // swing's speed & sideways motion feed power/spin exactly like a click serve)
   if (state.phase === 'serve') {
     glueBallToServer(state)
-    const clicked = state.serving === 0 ? inputs.serveHost : inputs.serveGuest
-    if (!clicked) return state
-
     const dir = state.serving === 0 ? 1 : -1 // host serves toward near/guest
     const pvx = state.serving === 0 ? pv.hostVx : pv.guestVx
     const pvy = state.serving === 0 ? pv.hostVy : pv.guestVy
+    const clicked = state.serving === 0 ? inputs.serveHost : inputs.serveGuest
+    const flicked = dir * pvy >= FIELD.serveSwingVel
+    if (!clicked && !flicked) return state
     const drift = ((state.seq % 7) / 7 - 0.5) * 0.25 * FIELD.ballSpeed
     const speed = Math.min(FIELD.ballSpeed + Math.max(0, dir * pvy) * FIELD.inertiaPower, FIELD.maxSpeed)
     state.ball.vx = drift
