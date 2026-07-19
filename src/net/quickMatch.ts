@@ -20,7 +20,15 @@ export interface QuickMatchHandle {
   poolSize(): number
 }
 
-export function startQuickMatch(onMatched: (privateCode: string, opponentId: string) => void): QuickMatchHandle {
+/** Trystero hands back the CACHED room if you re-join an id whose leave()
+ * hasn't finished — a dead pool nobody else can see. Await the previous
+ * leave before re-entering (fixes "second quick match never pairs"). */
+let poolLeavePending: Promise<unknown> = Promise.resolve()
+
+export async function startQuickMatch(
+  onMatched: (privateCode: string, opponentId: string) => void,
+): Promise<QuickMatchHandle> {
+  await poolLeavePending.catch(() => {})
   const room: Room = netJoinRoom({}, QUICK_ROOM)
 
   // normalize makeAction across Trystero API shapes (object {send,onMessage} vs [send,get])
@@ -56,7 +64,7 @@ export function startQuickMatch(onMatched: (privateCode: string, opponentId: str
     done = true
     window.clearInterval(retry)
     const code = [selfId, opponentId].sort().join('').slice(0, 24)
-    void room.leave()
+    poolLeavePending = Promise.resolve(room.leave()).catch(() => {})
     onMatched(code, opponentId)
   }
 
@@ -77,7 +85,7 @@ export function startQuickMatch(onMatched: (privateCode: string, opponentId: str
       window.clearInterval(retry)
       if (done) return
       done = true
-      void room.leave()
+      poolLeavePending = Promise.resolve(room.leave()).catch(() => {})
     },
     poolSize: () => peerIds().length + 1,
   }

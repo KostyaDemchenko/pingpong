@@ -119,7 +119,7 @@ export const FIELD = {
   endMargin: 0.08, // how far past an end the ball may fly before the point is scored
   // --- 2.5D height / bounce tuning (z is in the same normalized units as y) ---
   gravity: 4.0, // downward accel on z (units/sec^2) — pulls the ball back to the felt
-  restitution: 0.82, // energy kept on a felt bounce (0.7 made the 2nd bounce feel dead)
+  restitution: 0.86, // energy kept on a felt bounce (low values read as "the ball dies")
   serveVz: 1.0, // upward launch velocity when the ball is served
   returnVz: 1.05, // upward velocity added to a paddle return so it arcs back
   maxHitHeight: 0.35, // ball must be at/below this height to be returnable
@@ -135,7 +135,7 @@ export const FIELD = {
   spinFactor: 0.55, // lateral paddle velocity -> ball spin
   maxSpin: 1.2, // spin clamp
   spinCurve: 1.0, // how strongly spin bends vx (units/sec^2 per spin unit)
-  spinDecay: 1.1, // spin fades ~e^-t*decay
+  spinDecay: 0.9, // spin fades ~e^-t*decay (too fast reads as losing momentum)
   inertiaPower: 0.12, // forward paddle velocity -> extra shot speed
 } as const
 

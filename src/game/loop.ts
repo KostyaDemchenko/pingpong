@@ -101,8 +101,24 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let aiServeTicks = 0
 
   // (guest) smoothed display positions: snapshots arrive at ~30Hz but we render
-  // at 60fps — extrapolate from the last snapshot and ease toward it
+  // at 60fps. We keep the last TWO snapshots and render slightly in the past,
+  // INTERPOLATING between them (smooth regardless of network jitter); only
+  // when the buffer runs dry do we extrapolate ahead.
+  interface Sample {
+    t: number
+    bx: number
+    by: number
+    bz: number
+    bvx: number
+    bvy: number
+    bvz: number
+    hx: number
+    hy: number
+  }
   let lastSnapAt = 0
+  let sPrev: Sample | null = null
+  let sLast: Sample | null = null
+  let snapGapEma = 33 // measured ms between snapshots
   const disp = {bx: 0.5, by: 0.5, bz: 0, hx: 0.5, hy: FIELD.hostPaddleY as number}
   // (host) latest guest input timestamp, echoed in hot snapshots for RTT
   let lastGuestInputT = 0
@@ -222,13 +238,33 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
    * resets) so smoothing never rubber-bands across the table.
    */
   function smoothGuestView(now: number, frameDt: number): void {
-    const b = state.ball
-    // extrapolate up to 250ms ahead — TURN-relayed pairs see real latency
-    const el = lastSnapAt ? Math.min(0.25, (now - lastSnapAt) / 1000) : 0
-    const tx = b.x + b.vx * el
-    const ty = b.y + b.vy * el
-    const tz = Math.max(0, b.z + b.vz * el - 0.5 * FIELD.gravity * el * el)
-    const a = 1 - Math.pow(0.00002, frameDt)
+    if (!sLast) return
+    // render ~1.5 snapshot-intervals in the past: as long as snapshots keep
+    // arriving we interpolate between two REAL states — no guessing, no jitter
+    const delay = Math.min(120, Math.max(45, snapGapEma * 1.5))
+    const rt = now - delay
+    let tx: number
+    let ty: number
+    let tz: number
+    let thx: number
+    let thy: number
+    if (sPrev && rt <= sLast.t && sLast.t > sPrev.t) {
+      const f = Math.min(1, Math.max(0, (rt - sPrev.t) / (sLast.t - sPrev.t)))
+      tx = sPrev.bx + (sLast.bx - sPrev.bx) * f
+      ty = sPrev.by + (sLast.by - sPrev.by) * f
+      tz = sPrev.bz + (sLast.bz - sPrev.bz) * f
+      thx = sPrev.hx + (sLast.hx - sPrev.hx) * f
+      thy = sPrev.hy + (sLast.hy - sPrev.hy) * f
+    } else {
+      // buffer dry (late snapshot) — extrapolate ahead of the last state
+      const el = Math.min(0.25, Math.max(0, (rt - sLast.t) / 1000))
+      tx = sLast.bx + sLast.bvx * el
+      ty = sLast.by + sLast.bvy * el
+      tz = Math.max(0, sLast.bz + sLast.bvz * el - 0.5 * FIELD.gravity * el * el)
+      thx = sLast.hx
+      thy = sLast.hy
+    }
+    const a = 1 - Math.pow(0.000005, frameDt)
     if (Math.hypot(tx - disp.bx, ty - disp.by) > 0.15) {
       disp.bx = tx
       disp.by = ty
@@ -238,8 +274,8 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       disp.by += (ty - disp.by) * a
       disp.bz += (tz - disp.bz) * a
     }
-    disp.hx += (state.host.x - disp.hx) * a
-    disp.hy += (state.host.y - disp.hy) * a
+    disp.hx += (thx - disp.hx) * a
+    disp.hy += (thy - disp.hy) * a
   }
 
   function render(): void {
@@ -316,7 +352,21 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     },
     applyHotSnapshot(h: HotSnapshot): void {
       if (h.seq < state.seq) return
-      lastSnapAt = performance.now()
+      const nowMs = performance.now()
+      if (lastSnapAt) snapGapEma = snapGapEma * 0.8 + Math.min(200, nowMs - lastSnapAt) * 0.2
+      lastSnapAt = nowMs
+      sPrev = sLast
+      sLast = {
+        t: nowMs,
+        bx: h.b.x,
+        by: h.b.y,
+        bz: h.b.z,
+        bvx: h.b.vx,
+        bvy: h.b.vy,
+        bvz: h.b.vz,
+        hx: h.hx,
+        hy: h.hy,
+      }
       state.seq = h.seq
       state.phase = h.phase
       state.serving = h.serving

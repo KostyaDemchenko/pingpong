@@ -12,13 +12,20 @@ const players = ref(1)
 
 let handle: QuickMatchHandle | null = null
 let poll = 0
+let disposed = false
 
-onMounted(() => {
-  handle = startQuickMatch((code) => {
+onMounted(async () => {
+  // async: waits out a pending pool leave from a PREVIOUS quick match first
+  const h = await startQuickMatch((code) => {
     // paired → migrate into our private room and wait for the opponent to arrive
     flow.setRoomCode(code)
     net.connect(code)
   })
+  if (disposed) {
+    h.cancel()
+    return
+  }
+  handle = h
   poll = window.setInterval(() => {
     if (handle) players.value = handle.poolSize()
   }, 1000)
@@ -51,6 +58,7 @@ function cancel() {
 }
 
 onBeforeUnmount(() => {
+  disposed = true
   stopPolling()
   handle?.cancel() // no-op once matched; frees the pool if we left early
 })

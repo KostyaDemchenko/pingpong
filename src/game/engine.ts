@@ -265,7 +265,7 @@ function subStep(state: GameState, dt: number, halfW: number, pv: PaddleVel): bo
       }
     }
     // let tiny residual bounces settle so the ball rolls flat instead of jittering
-    if (Math.abs(b.vz) < 0.03) b.vz = 0
+    if (Math.abs(b.vz) < 0.02) b.vz = 0
   }
 
   // SIDE out-of-bounds: no invisible walls — the ball flies off the table

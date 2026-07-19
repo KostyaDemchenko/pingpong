@@ -164,7 +164,9 @@ export interface PongRoom {
   onOpponentJoin: (cb: (peerId: string, amHost: boolean) => void) => void
   onOpponentLeave: (cb: (peerId: string) => void) => void
   peerCount: () => number
-  leave: () => void
+  /** resolves when the room is fully left — await before re-joining the SAME
+   * room id (Trystero caches rooms until leave completes) */
+  leave: () => Promise<void>
 }
 
 export function createRoom(
@@ -201,7 +203,7 @@ export function createRoom(
       return Object.keys(room.getPeers()).length
     },
     leave() {
-      void room.leave()
+      return Promise.resolve(room.leave())
     },
   }
 }

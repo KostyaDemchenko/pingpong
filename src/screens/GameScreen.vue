@@ -249,15 +249,21 @@ onBeforeUnmount(() => {
 <template>
   <div class="relative h-full w-full flex flex-col bg-bg-base">
     <header class="flex items-center justify-between px-4 py-3">
-      <span class="flex items-center gap-2 font-body text-text-muted text-xs">
-        {{ flow.state.mode === 'local' ? 'PRACTICE' : `ROOM ${flow.state.roomCode}` }}
+      <span class="flex items-center gap-2 font-body text-text-muted text-xs min-w-0">
+        <!-- the long room code doesn't fit on phones — desktop only -->
+        <span class="hidden md:inline truncate max-w-[220px]">
+          {{ flow.state.mode === 'local' ? 'PRACTICE' : `ROOM ${flow.state.roomCode}` }}
+        </span>
         <template v-if="mode === 'guest' && ui.ping > 0">
           <span
-            class="w-2 h-2"
+            class="w-2 h-2 shrink-0"
             :class="ui.ping < 100 ? 'bg-brand' : ui.ping < 220 ? 'bg-text-secondary' : 'bg-danger'"
           ></span>
-          <span :class="ui.ping < 100 ? 'text-brand' : ui.ping < 220 ? 'text-text-secondary' : 'text-danger'">
-            PING {{ ui.ping }}MS
+          <span
+            class="whitespace-nowrap"
+            :class="ui.ping < 100 ? 'text-brand' : ui.ping < 220 ? 'text-text-secondary' : 'text-danger'"
+          >
+            {{ ui.ping }}MS
           </span>
         </template>
       </span>
@@ -289,11 +295,15 @@ onBeforeUnmount(() => {
       ></canvas>
 
       <!-- match history: who served, who scored & why (newest at the bottom).
-           Hover/tap expands the full log; z-30 keeps it usable during pause. -->
+           Hover/tap expands the full log; z-30 keeps it usable during pause.
+           On phones it eats too much of the court — shown only while paused. -->
       <div
         v-if="ui.log.length"
-        class="absolute top-2 left-2 z-30 flex flex-col gap-1 max-w-[260px]"
-        :class="logExpanded ? 'max-h-[70%] overflow-y-auto bg-bg-base/85 border border-border p-1.5' : ''"
+        class="absolute top-2 left-2 z-30 flex-col gap-1 max-w-[260px]"
+        :class="[
+          ui.paused ? 'flex' : 'hidden sm:flex',
+          logExpanded ? 'max-h-[70%] overflow-y-auto bg-bg-base/85 border border-border p-1.5' : '',
+        ]"
         @mouseenter="logExpanded = true"
         @mouseleave="logExpanded = false"
         @click.stop="logExpanded = !logExpanded"
@@ -332,6 +342,17 @@ onBeforeUnmount(() => {
         :class="toast.mine ? 'border-brand text-brand' : 'border-danger text-danger'"
       >
         <span class="font-display text-sm leading-none">{{ toast.text }}</span>
+      </div>
+
+      <!-- opponent asked for a pause — I haven't voted yet -->
+      <div
+        v-if="oppPauseVote && !myPauseVote && !ui.paused && !oppLeft"
+        class="pointer-events-none absolute top-14 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-2 bg-bg-base/90 border-2 border-danger animate-pulse"
+      >
+        <span class="h-1.5 w-1.5 bg-danger"></span>
+        <span class="font-display text-[9px] text-danger leading-none whitespace-nowrap">
+          {{ flow.state.oppName }} REQUESTS PAUSE · PRESS PAUSE
+        </span>
       </div>
 
       <!-- opponent left mid-match -->
