@@ -134,10 +134,13 @@ export const FIELD = {
   pointPauseTicks: 72, // ~1.2s breather between points before the next serve
   hostPaddleY: 0.06, // host spawn depth (far end)
   guestPaddleY: 0.94, // guest spawn depth (near end)
-  // depth bands each paddle may move in (its own half, stopping short of the net)
+  // depth bands each paddle may move in — deliberately stopping WELL short of
+  // the net: paddles waving at the midline read as "he's returning it right
+  // over the net" (balls passing deeper are still caught by the hitDepth
+  // proximity window as they travel through the paddle's depth)
   hostYMin: 0.03,
-  hostYMax: 0.42,
-  guestYMin: 0.58,
+  hostYMax: 0.3,
+  guestYMin: 0.7,
   guestYMax: 0.97,
   maxSpeed: 1.5, // clamp so speed-up can't run away
   maxDeflect: 0.75, // max horizontal vx contribution from an off-center hit

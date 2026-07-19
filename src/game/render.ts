@@ -337,7 +337,7 @@ function drawNet(ctx: CanvasRenderingContext2D, W: number, H: number): void {
  *
  * `live` — the volley-gate state: a dead paddle (ball hasn't bounced on your
  * half yet) renders dimmed with no shine, so unregistered swings explain
- * themselves. `flash` (1 → 0) is the short arming pulse when it goes live.
+ * themselves; the dim -> lit flip doubles as the arming cue.
  * `hit` (1 → 0) is the impact pop the moment this paddle strikes the ball.
  */
 export function drawPaddle(
@@ -348,7 +348,6 @@ export function drawPaddle(
   ny: number,
   isNear: boolean,
   live = true,
-  flash = 0,
   hit = 0,
 ): void {
   const p = project(W, H, nx, ny)
@@ -423,19 +422,6 @@ export function drawPaddle(
     ctx.fillStyle = colors.pixelBlack
     pixelPoly(ctx, bx, by, u, u, BLADE_START, BLADE_POLY)
     ctx.fill()
-    ctx.restore()
-  }
-
-  // arming pulse: a white pixel ring pops outward the moment the gate opens
-  if (flash > 0) {
-    const grow = 1 + 0.22 * (1 - flash)
-    const u2 = u * grow
-    ctx.save()
-    ctx.globalAlpha = 0.9 * flash
-    ctx.strokeStyle = colors.white
-    ctx.lineWidth = Math.max(2, 3 * u)
-    pixelPoly(ctx, p.sx - 35 * u2, p.sy - 35 * u2, u2, u2, BLADE_START, BLADE_POLY)
-    ctx.stroke()
     ctx.restore()
   }
 

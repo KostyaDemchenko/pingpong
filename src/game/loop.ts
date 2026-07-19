@@ -139,11 +139,6 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let prevBounceSeq = 0
   // felt-touch squash timestamp (ball flattens for ~100ms on a bounce)
   let squashT = -1e9
-  // volley-gate arming pulses: when a paddle flips dead -> live mid-rally
-  let prevHostLive = true
-  let prevGuestLive = true
-  let hostFlashT = -1e9
-  let guestFlashT = -1e9
   // paddle impact pops: fire whenever the engine registers a return/serve
   let prevLastHitter: 0 | 1 = 0
   let prevPhaseR: GameState['phase'] = 'coin'
@@ -204,7 +199,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     // b.y toward the midline read as "the rival returns it right at the net"
     const incoming = b.vy < 0 && b.y < 0.55
     const targetY = incoming
-      ? Math.min(Math.max(b.y - 0.05, FIELD.hostYMin), FIELD.hostYMax * 0.35)
+      ? Math.min(Math.max(b.y - 0.05, FIELD.hostYMin), FIELD.hostYMax * 0.5)
       : FIELD.hostPaddleY
     const dz = 0.01
     const dx = targetX - aiX
@@ -408,23 +403,17 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     const bX = mode === 'guest' ? disp.bx : state.ball.x
     const bY = mode === 'guest' ? disp.by : state.ball.y
     const bZ = mode === 'guest' ? disp.bz : state.ball.z
-    // volley-gate visuals: dead paddles render dimmed; a fresh arming pulses
+    // volley-gate visuals: dead paddles render dimmed (the dim -> lit flip IS
+    // the arming cue; an extra ring here read as a duplicate hit effect)
     const hostLive = paddleLive(0)
     const guestLive = paddleLive(1)
-    if (hostLive && !prevHostLive && state.phase === 'rally') hostFlashT = nowMs
-    if (guestLive && !prevGuestLive && state.phase === 'rally') guestFlashT = nowMs
-    prevHostLive = hostLive
-    prevGuestLive = guestLive
-    const flash = (t: number) => Math.max(0, 1 - (nowMs - t) / 220)
     const hitPop = (t: number) => Math.max(0, 1 - (nowMs - t) / 150)
     const farLive = flip ? guestLive : hostLive
     const nearLive = flip ? hostLive : guestLive
-    const farFlash = flash(flip ? guestFlashT : hostFlashT)
-    const nearFlash = flash(flip ? hostFlashT : guestFlashT)
     const farHit = hitPop(flip ? guestHitT : hostHitT)
     const nearHit = hitPop(flip ? hostHitT : guestHitT)
     const squash = Math.max(0, 1 - (nowMs - squashT) / 100)
-    drawPaddle(ctx!, W, H, vx(farX), vy(farY), false, farLive, farFlash, farHit)
+    drawPaddle(ctx!, W, H, vx(farX), vy(farY), false, farLive, farHit)
     const ball = () =>
       drawBall(
         ctx!,
@@ -444,11 +433,11 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     const nearServes =
       (state.phase === 'serve' || state.phase === 'point') && state.serving === (flip ? 0 : 1)
     if (nearServes) {
-      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash, nearHit)
+      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearHit)
       ball()
     } else {
       ball()
-      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash, nearHit)
+      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearHit)
     }
   }
 
