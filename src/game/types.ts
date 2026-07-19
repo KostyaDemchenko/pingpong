@@ -98,7 +98,7 @@ export const FIELD = {
   ballSpeed: 0.9, // units/sec
   speedUpPerHit: 1.02, // gentle ramp within a rally (resets every point)
   physicsHz: 60,
-  netBroadcastHz: 40, // tiny ~190B snapshots — higher rate = lower guest delay
+  netBroadcastHz: 60, // one ~190B snapshot per physics tick (~12KB/s) — min guest delay
   pointsToWin: 11, // reach 11 with a 2-point lead (deuce rules)
   servesPerTurn: 2, // server alternates every 2 points (every 1 at deuce)
   pointPauseTicks: 72, // ~1.2s breather between points before the next serve

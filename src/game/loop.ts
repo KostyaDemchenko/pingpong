@@ -116,10 +116,9 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     hy: number
   }
   let lastSnapAt = 0
-  let sPrev: Sample | null = null
-  let sLast: Sample | null = null
-  let snapGapEma = 25 // measured ms between snapshots
-  let snapJitterEma = 5 // measured |gap - average| — network jitter
+  const samples: Sample[] = [] // ~400ms of history, newest last
+  let snapGapEma = 17 // measured ms between snapshots
+  let snapJitterEma = 4 // measured |gap - average| — network jitter
   const disp = {bx: 0.5, by: 0.5, bz: 0, hx: 0.5, hy: FIELD.hostPaddleY as number}
   // (host) latest guest input timestamp, echoed in hot snapshots for RTT
   let lastGuestInputT = 0
@@ -239,32 +238,44 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
    * resets) so smoothing never rubber-bands across the table.
    */
   function smoothGuestView(now: number, frameDt: number): void {
-    if (!sLast) return
+    const newest = samples[samples.length - 1]
+    if (!newest) return
     // adaptive render delay: one snapshot interval + 2x measured jitter — a
-    // clean connection renders ~35ms behind, a jittery one backs off just
-    // enough that the interpolation buffer (two REAL states) never runs dry
-    const delay = Math.min(150, Math.max(35, snapGapEma + snapJitterEma * 2 + 8))
+    // clean connection renders ~35ms behind; jitter spikes push the buffer
+    // back fast (asymmetric EMA) so interpolation rarely runs dry
+    const delay = Math.min(180, Math.max(30, snapGapEma + snapJitterEma * 2 + 8))
     const rt = now - delay
     let tx: number
     let ty: number
     let tz: number
     let thx: number
     let thy: number
-    if (sPrev && rt <= sLast.t && sLast.t > sPrev.t) {
-      const f = Math.min(1, Math.max(0, (rt - sPrev.t) / (sLast.t - sPrev.t)))
-      tx = sPrev.bx + (sLast.bx - sPrev.bx) * f
-      ty = sPrev.by + (sLast.by - sPrev.by) * f
-      tz = sPrev.bz + (sLast.bz - sPrev.bz) * f
-      thx = sPrev.hx + (sLast.hx - sPrev.hx) * f
-      thy = sPrev.hy + (sLast.hy - sPrev.hy) * f
+    if (rt >= newest.t) {
+      // buffer dry (late snapshots) — extrapolate ahead of the newest state
+      const el = Math.min(0.25, (rt - newest.t) / 1000)
+      tx = newest.bx + newest.bvx * el
+      ty = newest.by + newest.bvy * el
+      tz = Math.max(0, newest.bz + newest.bvz * el - 0.5 * FIELD.gravity * el * el)
+      thx = newest.hx
+      thy = newest.hy
     } else {
-      // buffer dry (late snapshot) — extrapolate ahead of the last state
-      const el = Math.min(0.25, Math.max(0, (rt - sLast.t) / 1000))
-      tx = sLast.bx + sLast.bvx * el
-      ty = sLast.by + sLast.bvy * el
-      tz = Math.max(0, sLast.bz + sLast.bvz * el - 0.5 * FIELD.gravity * el * el)
-      thx = sLast.hx
-      thy = sLast.hy
+      // walk the history for the two samples straddling the render time
+      let a = samples[0]!
+      let b = newest
+      for (let i = samples.length - 1; i >= 1; i--) {
+        if (samples[i - 1]!.t <= rt) {
+          a = samples[i - 1]!
+          b = samples[i]!
+          break
+        }
+      }
+      const span = b.t - a.t
+      const f = span > 0 ? Math.min(1, Math.max(0, (rt - a.t) / span)) : 1
+      tx = a.bx + (b.bx - a.bx) * f
+      ty = a.by + (b.by - a.by) * f
+      tz = a.bz + (b.bz - a.bz) * f
+      thx = a.hx + (b.hx - a.hx) * f
+      thy = a.hy + (b.hy - a.hy) * f
     }
     const a = 1 - Math.pow(0.000005, frameDt)
     if (Math.hypot(tx - disp.bx, ty - disp.by) > 0.15) {
@@ -356,13 +367,15 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       if (h.seq < state.seq) return
       const nowMs = performance.now()
       if (lastSnapAt) {
-        const gap = Math.min(200, nowMs - lastSnapAt)
+        const gap = Math.min(250, nowMs - lastSnapAt)
         snapGapEma = snapGapEma * 0.8 + gap * 0.2
-        snapJitterEma = snapJitterEma * 0.8 + Math.abs(gap - snapGapEma) * 0.2
+        const dev = Math.abs(gap - snapGapEma)
+        // asymmetric: spikes raise the estimate instantly, calm decays it slowly
+        snapJitterEma =
+          dev > snapJitterEma ? snapJitterEma * 0.5 + dev * 0.5 : snapJitterEma * 0.95 + dev * 0.05
       }
       lastSnapAt = nowMs
-      sPrev = sLast
-      sLast = {
+      samples.push({
         t: nowMs,
         bx: h.b.x,
         by: h.b.y,
@@ -372,6 +385,9 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
         bvz: h.b.vz,
         hx: h.hx,
         hy: h.hy,
+      })
+      while (samples.length > 30 || (samples.length > 2 && nowMs - samples[0]!.t > 450)) {
+        samples.shift()
       }
       state.seq = h.seq
       state.phase = h.phase
