@@ -141,6 +141,13 @@ export const FIELD = {
   spinCurve: 1.0, // how strongly spin bends vx (units/sec^2 per spin unit)
   spinDecay: 0.9, // spin fades ~e^-t*decay (too fast reads as losing momentum)
   inertiaPower: 0.12, // forward paddle velocity -> extra shot speed
+  // --- overdrive smash (risk/reward): a violent swing breaks the normal speed
+  // cap — the ball catches fire, but physics makes overpowered shots overshoot
+  // the table (out without touching the receiver's half = hitter loses)
+  overdriveSwing: 2.2, // forward swing speed that triggers overdrive
+  overdrivePowerMul: 2, // inertia boost multiplier while overdriven
+  overdriveMaxSpeed: 2.2, // hard cap for overdriven shots (normal cap is maxSpeed)
+  fireSpeed: 1.55, // ball speed above which the flame trail renders
 } as const
 
 export function initialState(): GameState {

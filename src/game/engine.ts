@@ -350,9 +350,15 @@ function tryPaddleHit(
   // snap back onto the plane and send it the other way
   b.y = paddle.y
 
-  // speed-up per hit + inertia bonus for swinging INTO the ball, clamped
-  const swing = Math.max(0, dir * pvy) * FIELD.inertiaPower
-  const speed = Math.min(Math.hypot(b.vx, b.vy) * FIELD.speedUpPerHit + swing, FIELD.maxSpeed)
+  // speed-up per hit + inertia bonus for swinging INTO the ball. A violent
+  // swing (>= overdriveSwing) goes into OVERDRIVE: doubled boost past the
+  // normal cap — spectacular, but fast flat shots overshoot the table and
+  // hand the point to the receiver (out without touching their half).
+  const swing = Math.max(0, dir * pvy)
+  const overdrive = swing >= FIELD.overdriveSwing
+  const boost = swing * FIELD.inertiaPower * (overdrive ? FIELD.overdrivePowerMul : 1)
+  const cap = overdrive ? FIELD.overdriveMaxSpeed : FIELD.maxSpeed
+  const speed = Math.min(Math.hypot(b.vx, b.vy) * FIELD.speedUpPerHit + boost, cap)
 
   // angle from hit offset: center = straight, edges = steep deflection
   const offset = clamp(dx / halfW, -1, 1)

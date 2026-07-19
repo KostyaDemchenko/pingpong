@@ -312,6 +312,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       bZ,
       flip ? -state.ball.vx : state.ball.vx,
       flip ? -state.ball.vy : state.ball.vy,
+      flip ? -state.ball.spin : state.ball.spin,
     )
     drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true)
   }

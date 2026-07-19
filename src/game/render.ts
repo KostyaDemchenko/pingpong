@@ -390,6 +390,9 @@ export function drawPaddle(
  * exactly where the engine checks the paddle. The ground shadow stays at the
  * true position — the gap between them sells the 2.5D arc.
  */
+/** Effect palette (canvas-only, not Pencil design tokens). */
+const FIRE_COLORS = ['#ffd75e', '#ff9f45', '#f76b6b'] as const
+
 export function drawBall(
   ctx: CanvasRenderingContext2D,
   W: number,
@@ -399,6 +402,7 @@ export function drawBall(
   z = 0,
   vx = 0,
   vy = 0,
+  spin = 0,
 ): void {
   const zc = Math.min(0.5, Math.max(0, z))
   const pGround = project(W, H, nx, ny) // true position (shadow)
@@ -439,9 +443,34 @@ export function drawBall(
     ctx.restore()
   }
 
-  // green motion trail behind the ball (opposite its velocity)
+  // motion trails behind the ball (opposite its velocity):
+  //  - overdrive smash  -> pixel FLAME (flickering yellow/orange/red squares)
+  //  - heavy spin       -> curved trail bending toward the Magnus direction
+  //  - otherwise        -> the design's single faint green dot
   const speed = Math.hypot(vx, vy)
-  if (speed > 0.05) {
+  const fire = speed >= FIELD.fireSpeed
+  const spinning = Math.abs(spin) > 0.35
+  if (speed > 0.05 && (fire || spinning)) {
+    const vnx = vx / speed
+    const vny = vy / speed
+    const px = -vny // lateral (perpendicular) direction for the spin curve
+    const py = vnx
+    const curve = spinning ? Math.sign(spin) * Math.min(1, Math.abs(spin)) : 0
+    const n = fire ? 5 : 3
+    ctx.save()
+    for (let i = 1; i <= n; i++) {
+      const back = d * (0.45 + 0.36 * i)
+      const side = curve * d * 0.09 * i * i
+      const jitter = fire ? (Math.random() - 0.5) * d * 0.18 : 0
+      const cx = pBall.sx - vnx * back + px * (side + jitter)
+      const cy = pBall.sy - vny * back + py * (side + jitter)
+      const size = Math.max(2, d * (fire ? 0.42 - 0.055 * i : 0.28 - 0.045 * i))
+      ctx.globalAlpha = (fire ? 0.85 : 0.5) * (1 - i / (n + 1))
+      ctx.fillStyle = fire ? FIRE_COLORS[(i + (Math.floor(pBall.sx) % 3)) % 3]! : colors.brand
+      ctx.fillRect(Math.round(cx - size / 2), Math.round(cy - size / 2), Math.round(size), Math.round(size))
+    }
+    ctx.restore()
+  } else if (speed > 0.05) {
     const tx = pBall.sx - (vx / speed) * d * 0.75
     const ty = pBall.sy - (vy / speed) * d * 0.75
     ctx.save()
@@ -473,4 +502,14 @@ export function drawBall(
   ctx.fillStyle = colors.ballShade
   ctx.fillRect(bx + 14 * u, by + 13 * u, 6 * u, 6 * u)
   ctx.restore()
+
+  // overdrive: heat-tint the ball itself
+  if (fire) {
+    ctx.save()
+    ctx.globalAlpha = 0.3
+    ctx.fillStyle = FIRE_COLORS[1]!
+    pixelPoly(ctx, bx, by, u, BALL_START, BALL_POLY)
+    ctx.fill()
+    ctx.restore()
+  }
 }
