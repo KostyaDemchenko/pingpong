@@ -150,6 +150,21 @@ const RAIN = makePieces(22, ['var(--color-danger)', 'var(--color-text-muted)'], 
       />
     </div>
 
+    <!-- rematch status toast — same pixel-chip style as the in-game pause banner -->
+    <div
+      v-if="rematchHint"
+      class="absolute top-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-2 bg-bg-base/90 border-2"
+      :class="[rm.oppGone ? 'border-danger' : 'border-brand', rm.theirs && !rm.mine ? 'animate-pulse' : '']"
+    >
+      <span class="h-1.5 w-1.5 shrink-0" :class="rm.oppGone ? 'bg-danger' : 'bg-brand'"></span>
+      <span
+        class="font-display text-[9px] leading-none whitespace-nowrap"
+        :class="rm.oppGone ? 'text-danger' : 'text-brand'"
+      >
+        {{ rematchHint }}
+      </span>
+    </div>
+
     <!-- Motif: pixel trophy (win) or down-arrow (lose) -->
     <div class="relative z-10 flex flex-col items-center">
       <!-- Trophy -->
@@ -257,15 +272,12 @@ const RAIN = makePieces(22, ['var(--color-danger)', 'var(--color-text-muted)'], 
 
     <!-- Buttons -->
     <div class="relative z-10 flex flex-col sm:flex-row gap-4 w-full max-w-[320px] sm:max-w-none sm:w-auto">
-      <PixelButton class="w-full sm:w-auto" @click="rematch">{{ rematchLabel }}</PixelButton>
-      <PixelButton variant="secondary" class="w-full sm:w-auto" @click="toMenu">BACK TO MENU</PixelButton>
-      <span
-        v-if="rematchHint"
-        class="w-full text-center font-body text-[11px]"
-        :class="rm.oppGone ? 'text-danger' : 'text-brand'"
-      >
-        {{ rematchHint }}
-      </span>
+      <PixelButton class="w-full sm:w-auto sm:min-w-[220px] whitespace-nowrap" @click="rematch">
+        {{ rematchLabel }}
+      </PixelButton>
+      <PixelButton variant="secondary" class="w-full sm:w-auto whitespace-nowrap" @click="toMenu">
+        BACK TO MENU
+      </PixelButton>
     </div>
   </div>
 </template>
