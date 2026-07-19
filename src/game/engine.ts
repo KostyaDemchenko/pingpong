@@ -305,6 +305,7 @@ function subStep(state: GameState, dt: number, halfW: number, pv: PaddleVel): bo
     b.z = 0
     if (b.vz < 0) {
       b.vz = -b.vz * FIELD.restitution
+      state.bounceSeq++ // renderer fires bounce effects off this counter
       // --- felt touch: apply the real-TT touch rules ---
       const halfOwner: 0 | 1 = b.y < 0.5 ? 0 : 1
       const isServeFlight = state.rallyHits === 0 // ball is still the serve
@@ -461,15 +462,18 @@ function tryPaddleHit(
     return true
   }
 
-  // speed-up per hit + inertia bonus for swinging INTO the ball. A violent
-  // swing (>= overdriveSwing) goes into OVERDRIVE: doubled boost past the
-  // normal cap — spectacular, but fast flat shots overshoot the table and
-  // hand the point to the receiver (out without touching their half).
+  // return speed = blend of incoming speed and the base (so pace follows the
+  // CURRENT swings instead of ratcheting up all rally) + inertia bonus for
+  // swinging INTO the ball. A violent swing (>= overdriveSwing) goes into
+  // OVERDRIVE: doubled boost past the normal cap — spectacular, but fast flat
+  // shots smack the net or overshoot and hand the point to the receiver.
   const swing = Math.max(0, dir * pvy)
   const overdrive = swing >= FIELD.overdriveSwing
   const boost = swing * FIELD.inertiaPower * (overdrive ? FIELD.overdrivePowerMul : 1)
   const cap = overdrive ? FIELD.overdriveMaxSpeed : FIELD.maxSpeed
-  const speed = Math.min(Math.hypot(b.vx, b.vy) * FIELD.speedUpPerHit + boost, cap)
+  const carried = Math.hypot(b.vx, b.vy) * FIELD.returnBlend
+  const refill = FIELD.ballSpeed * (1 - FIELD.returnBlend)
+  const speed = Math.min(carried + refill + boost, cap)
 
   // angle from hit offset: center = straight, edges = steep deflection
   const offset = clamp(dx / halfW, -1, 1)

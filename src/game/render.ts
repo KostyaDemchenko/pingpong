@@ -338,6 +338,7 @@ function drawNet(ctx: CanvasRenderingContext2D, W: number, H: number): void {
  * `live` — the volley-gate state: a dead paddle (ball hasn't bounced on your
  * half yet) renders dimmed with no shine, so unregistered swings explain
  * themselves. `flash` (1 → 0) is the short arming pulse when it goes live.
+ * `hit` (1 → 0) is the impact pop the moment this paddle strikes the ball.
  */
 export function drawPaddle(
   ctx: CanvasRenderingContext2D,
@@ -348,9 +349,15 @@ export function drawPaddle(
   isNear: boolean,
   live = true,
   flash = 0,
+  hit = 0,
 ): void {
   const p = project(W, H, nx, ny)
-  const D = Math.max(22, FIELD.paddleWidth * p.xpu) // blade diameter = physics width
+  // blade diameter = physics width via the projection, with an absolute cap:
+  // on wide desktop canvases the honest size reads clownishly large, so the
+  // sprite may shrink BELOW the hitbox there (forgiving ghost hits) — it must
+  // never exceed it (hits that look right but whiff).
+  // The impact pop kicks the sprite up a few percent for ~150ms.
+  const D = Math.max(22, Math.min(FIELD.paddleWidth * p.xpu, H * 0.15)) * (1 + 0.07 * hit)
   const u = D / 70 // component blade grid unit
   const bx = p.sx - 35 * u // blade origin (top-left of the 70-grid)
   const by = p.sy - 35 * u
@@ -428,6 +435,19 @@ export function drawPaddle(
     ctx.strokeStyle = colors.white
     ctx.lineWidth = Math.max(2, 3 * u)
     pixelPoly(ctx, p.sx - 35 * u2, p.sy - 35 * u2, u2, u2, BLADE_START, BLADE_POLY)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // impact pop ring: a fast bright ring right as this paddle strikes the ball
+  if (hit > 0) {
+    const grow = 1.04 + 0.3 * (1 - hit)
+    const u3 = u * grow
+    ctx.save()
+    ctx.globalAlpha = 0.85 * hit
+    ctx.strokeStyle = isNear ? colors.brand : colors.danger
+    ctx.lineWidth = Math.max(2, 4 * u)
+    pixelPoly(ctx, p.sx - 35 * u3, p.sy - 35 * u3, u3, u3, BLADE_START, BLADE_POLY)
     ctx.stroke()
     ctx.restore()
   }
@@ -509,9 +529,10 @@ export function drawBall(
   const zc = Math.min(0.5, Math.max(0, z))
   const pGround = project(W, H, nx, ny) // true position (shadow)
   const pBall = project(W, H, nx, ny - zc * FIELD.aimLift) // rendered sprite
-  // sprite diameter = physics diameter via the projection (honest hitbox);
+  // sprite diameter = physics diameter via the projection (honest hitbox),
+  // capped like the blade so wide desktop canvases don't inflate it;
   // slight growth with height keeps a rising ball readable (visual only)
-  const d = Math.max(8, 2 * FIELD.ballRadius * pBall.xpu) * (1 + zc * 0.35)
+  const d = Math.max(8, Math.min(2 * FIELD.ballRadius * pBall.xpu, H * 0.05)) * (1 + zc * 0.35)
   const u = d / 24 // component grid unit
   // felt-touch squash: flatten vertically, widen horizontally (1 -> 0)
   const ux = u * (1 + 0.35 * squash)

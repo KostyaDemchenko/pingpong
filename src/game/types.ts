@@ -64,6 +64,8 @@ export interface HotSnapshot {
   bh: number
   bg: number
   lh: 0 | 1
+  /** felt-touch counter (GameState.bounceSeq) for guest-side bounce effects */
+  bs: number
   /** echo of the guest's latest input timestamp — lets the guest measure RTT */
   et: number
 }
@@ -82,6 +84,10 @@ export interface GameState {
   lastHitter: 0 | 1 // who last hit the ball (server counts as first hitter)
   bounceHost: number // felt bounces on the host half since the last hit
   bounceGuest: number // felt bounces on the guest half since the last hit
+  /** total felt touches this match — the renderer diffs it to fire bounce
+   * effects (ripple/squash) exactly when the ENGINE says the ball landed,
+   * instead of sniffing z between frames (which misses fast bounces) */
+  bounceSeq: number
   /** the ball clipped the net since the last hit (drives the 'net' reason) */
   netTouch: boolean
   /** who serves the FIRST point (coin flip); -1 until decided */
@@ -116,7 +122,11 @@ export const FIELD = {
   paddleWidth: 0.17,
   ballRadius: 0.026,
   ballSpeed: 0.9, // units/sec
-  speedUpPerHit: 1.02, // gentle ramp within a rally (resets every point)
+  // Return speed is a BLEND, not an accumulator: keep this share of the
+  // incoming speed, refill the rest from ballSpeed, then add the swing bonus.
+  // Passive blocks settle near ballSpeed instead of ratcheting to the cap —
+  // the ball is only as fast as the swings that are keeping it fast.
+  returnBlend: 0.7,
   physicsHz: 60,
   netBroadcastHz: 60, // one ~190B snapshot per physics tick (~12KB/s) — min guest delay
   pointsToWin: 11, // reach 11 with a 2-point lead (deuce rules)
@@ -201,6 +211,7 @@ export function initialState(): GameState {
     lastHitter: 0,
     bounceHost: 0,
     bounceGuest: 0,
+    bounceSeq: 0,
     netTouch: false,
     firstServer: -1,
     pointTimer: 0,

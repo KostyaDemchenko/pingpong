@@ -132,10 +132,11 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   // (guest) smoothed RTT estimate in ms
   let rttEma = 0
 
-  // felt-bounce ripples (visual only): model-space position + spawn time
+  // felt-bounce ripples (visual only): model-space position + spawn time.
+  // Driven by the ENGINE's bounceSeq counter (via snapshots for the guest) —
+  // sampling z between frames missed fast bounces entirely.
   const ripples: {nx: number; ny: number; t: number}[] = []
-  let prevBallZ = 0
-  let prevBallVz = 0
+  let prevBounceSeq = 0
   // felt-touch squash timestamp (ball flattens for ~100ms on a bounce)
   let squashT = -1e9
   // volley-gate arming pulses: when a paddle flips dead -> live mid-rally
@@ -143,6 +144,11 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let prevGuestLive = true
   let hostFlashT = -1e9
   let guestFlashT = -1e9
+  // paddle impact pops: fire whenever the engine registers a return/serve
+  let prevLastHitter: 0 | 1 = 0
+  let prevPhaseR: GameState['phase'] = 'coin'
+  let hostHitT = -1e9
+  let guestHitT = -1e9
 
   // last score reported through onScore. Compared each tick against the state,
   // NOT against a pre-physics snapshot — the guest's score changes between
@@ -151,6 +157,22 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   let notifiedGuest = 0
 
   const dpr = () => Math.max(1, Math.min(window.devicePixelRatio || 1, 3))
+
+  // dev-only live-state probe (debugging aid; stripped from prod by the flag)
+  if (import.meta.env.DEV) {
+    ;(window as any).__pp = () => ({
+      mode,
+      phase: state.phase,
+      serving: state.serving,
+      paused: state.paused,
+      pointTimer: state.pointTimer,
+      firstServer: state.firstServer,
+      seq: state.seq,
+      ball: {...state.ball},
+      running,
+      accum,
+    })
+  }
 
   function resize(): void {
     // layout size, NOT getBoundingClientRect: the CRT screen transition scales
@@ -176,10 +198,13 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
   function stepAi(dt: number): void {
     const b = state.ball
     const targetX = clamp01(b.x)
-    // come out to meet the ball when it's incoming on the AI half, else go home
-    const incoming = b.vy < 0 && b.y < 0.6
+    // come out to meet an incoming ball, but never camp at the net: the AI
+    // stays in the BACK third of its half (proximity hits connect as the ball
+    // passes through its depth) and returns home between exchanges — chasing
+    // b.y toward the midline read as "the rival returns it right at the net"
+    const incoming = b.vy < 0 && b.y < 0.55
     const targetY = incoming
-      ? Math.min(Math.max(b.y, FIELD.hostYMin), FIELD.hostYMax)
+      ? Math.min(Math.max(b.y - 0.05, FIELD.hostYMin), FIELD.hostYMax * 0.35)
       : FIELD.hostPaddleY
     const dz = 0.01
     const dx = targetX - aiX
@@ -260,28 +285,26 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       handle.onScore?.({host: state.scoreHost, guest: state.scoreGuest})
     }
 
-    // felt-bounce detection for the ripple effect: the ball's vertical motion
-    // flipped from falling to at-rest/rising right at the felt
-    const bz = mode === 'guest' ? disp.bz : state.ball.z
-    const bvz = state.ball.vz
-    if (
-      state.phase === 'rally' &&
-      prevBallZ > 0.004 &&
-      bz <= 0.012 &&
-      prevBallVz < -0.15 &&
-      bvz >= prevBallVz + 0.1
-    ) {
-      const last = ripples[ripples.length - 1]
+    // felt-bounce effects: the engine bumps bounceSeq on EVERY felt touch
+    // (guests receive it in snapshots) — fire the ripple + squash exactly then
+    if (state.bounceSeq !== prevBounceSeq) {
+      prevBounceSeq = state.bounceSeq
       const bx = mode === 'guest' ? disp.bx : state.ball.x
       const by = mode === 'guest' ? disp.by : state.ball.y
-      if (!last || now - last.t > 120 || Math.hypot(bx - last.nx, by - last.ny) > 0.05) {
-        ripples.push({nx: bx, ny: by, t: now})
-        if (ripples.length > 6) ripples.shift()
-        squashT = now
-      }
+      ripples.push({nx: bx, ny: by, t: now})
+      if (ripples.length > 6) ripples.shift()
+      squashT = now
     }
-    prevBallZ = bz
-    prevBallVz = bvz
+    // paddle impact pops: a serve launch or a mid-rally hitter change means
+    // that side just struck the ball
+    if (state.phase === 'rally') {
+      if (prevPhaseR !== 'rally' || state.lastHitter !== prevLastHitter) {
+        if (state.lastHitter === 0) hostHitT = now
+        else guestHitT = now
+      }
+      prevLastHitter = state.lastHitter
+    }
+    prevPhaseR = state.phase
 
     render()
     raf = requestAnimationFrame(tick)
@@ -393,12 +416,15 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     prevHostLive = hostLive
     prevGuestLive = guestLive
     const flash = (t: number) => Math.max(0, 1 - (nowMs - t) / 220)
+    const hitPop = (t: number) => Math.max(0, 1 - (nowMs - t) / 150)
     const farLive = flip ? guestLive : hostLive
     const nearLive = flip ? hostLive : guestLive
     const farFlash = flash(flip ? guestFlashT : hostFlashT)
     const nearFlash = flash(flip ? hostFlashT : guestFlashT)
+    const farHit = hitPop(flip ? guestHitT : hostHitT)
+    const nearHit = hitPop(flip ? hostHitT : guestHitT)
     const squash = Math.max(0, 1 - (nowMs - squashT) / 100)
-    drawPaddle(ctx!, W, H, vx(farX), vy(farY), false, farLive, farFlash)
+    drawPaddle(ctx!, W, H, vx(farX), vy(farY), false, farLive, farFlash, farHit)
     const ball = () =>
       drawBall(
         ctx!,
@@ -418,11 +444,11 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
     const nearServes =
       (state.phase === 'serve' || state.phase === 'point') && state.serving === (flip ? 0 : 1)
     if (nearServes) {
-      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash)
+      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash, nearHit)
       ball()
     } else {
       ball()
-      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash)
+      drawPaddle(ctx!, W, H, vx(near.x), vy(near.y), true, nearLive, nearFlash, nearHit)
     }
   }
 
@@ -477,6 +503,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
         bh: state.bounceHost,
         bg: state.bounceGuest,
         lh: state.lastHitter,
+        bs: state.bounceSeq,
         et: lastGuestInputT,
       }
     },
@@ -518,6 +545,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: Options = {}): GameH
       state.bounceHost = h.bh
       state.bounceGuest = h.bg
       state.lastHitter = h.lh
+      state.bounceSeq = h.bs
       if (h.et > 0) {
         const rtt = performance.now() - h.et
         if (rtt >= 0 && rtt < 5000) rttEma = rttEma ? rttEma * 0.8 + rtt * 0.2 : rtt
